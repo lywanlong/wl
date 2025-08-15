@@ -138,7 +138,7 @@ function M.handle_while(template, env, tag_end, code)
     local iterations = 0
     
     -- 安全循环：限制最大迭代次数
-    while iterations < constants.MAX_LOOP_ITERATIONS do
+    while iterations < constants.PERFORMANCE.MAX_LOOP_ITERATIONS do
         local condition, eval_error = utils.eval(code, env)
         if eval_error then
             utils.error_with_context("while 条件计算错误: " .. eval_error, template, tag_end)
@@ -153,8 +153,8 @@ function M.handle_while(template, env, tag_end, code)
     end
     
     -- 检查是否因为超出最大迭代次数而退出
-    if iterations >= constants.MAX_LOOP_ITERATIONS then
-        utils.error_with_context("while 循环超出最大迭代次数限制 (" .. constants.MAX_LOOP_ITERATIONS .. ")", template, tag_end)
+    if iterations >= constants.PERFORMANCE.MAX_LOOP_ITERATIONS then
+        utils.error_with_context("while 循环超出最大迭代次数限制 (" .. constants.PERFORMANCE.MAX_LOOP_ITERATIONS .. ")", template, tag_end)
     end
     
     return table.concat(result), end_e + 1

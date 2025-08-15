@@ -1,16 +1,18 @@
 --============================================================================
--- STRP 模板引擎 - 解析器模块
+-- STRP 模板引擎 - 解析器模块 v2.1
 -- 
 -- 负责模板语法的解析和处理：
 -- • 块结构解析：查找匹配的开始/结束标记
 -- • 过滤器链解析：处理复杂的过滤器语法
 -- • 变量替换：处理 ${variable} 语法
+-- • 嵌套模板：支持 ${var|filter:${nested_var}} 语法
 -- • 参数解析：处理函数参数和过滤器参数
 -- 
 -- 核心算法：
 -- • 递归下降解析：处理嵌套结构
--- • 有限状态机：解析复杂语法
+-- • 智能括号匹配：支持任意深度的嵌套
 -- • 惰性求值：提升性能
+-- • 缓存优化：复用编译结果
 --============================================================================
 
 -- 模块依赖
@@ -22,6 +24,70 @@ local filter_mod = require 'wl.tools.strp.filters'
 local M = {}
 
 --============================================================================
+-- 缓存系统
+--============================================================================
+
+-- 编译缓存
+local parse_cache = {}
+local filter_cache = {}
+
+-- 缓存清理函数
+local function cleanup_cache()
+    local cache_size = 0
+    for _ in pairs(parse_cache) do
+        cache_size = cache_size + 1
+    end
+    
+    if cache_size > constants.PERFORMANCE.MAX_CACHE_SIZE then
+        -- 清理一半的缓存（简单的LRU）
+        local count = 0
+        local half_size = math.floor(cache_size / 2)
+        for key in pairs(parse_cache) do
+            if count >= half_size then break end
+            parse_cache[key] = nil
+            count = count + 1
+        end
+    end
+end
+
+--============================================================================
+-- 工具函数
+--============================================================================
+
+--- 获取变量值
+---@param key string 变量键
+---@param env table 环境变量表
+---@return any value 变量值
+local function get_variable_value(key, env)
+    if not env or type(key) ~= "string" then
+        return nil
+    end
+    
+    -- 简单变量直接访问
+    if not key:find("[.%[%]]") then
+        return env[key]
+    end
+    
+    -- 复杂路径使用工具函数
+    local value, found = utils.get_nested_value(env, key)
+    return found and value or nil
+end
+
+--- 转义正则表达式模式
+---@param pattern string 模式字符串
+---@return string escaped 转义后的模式
+local function escape_pattern(pattern)
+    return utils.escape_pattern(pattern)
+end
+
+--- 获取过滤器函数
+---@param filter_name string 过滤器名称
+---@return function? filter_func 过滤器函数
+local function get_filter_function(filter_name)
+    return filter_mod.get_filter(filter_name)
+end
+
+--============================================================================
 -- 块结构解析 - 处理嵌套的控制结构
 --============================================================================
 
@@ -30,119 +96,106 @@ local M = {}
 --- 使用栈式算法处理嵌套的控制结构，确保正确配对。
 --- 支持任意深度的嵌套，如：if 中嵌套 for，for 中嵌套 switch 等。
 --- 
---- 算法流程：
---- 1. 从起始位置开始扫描
---- 2. 遇到开始标记时深度+1
---- 3. 遇到结束标记时深度-1  
---- 4. 深度为0时找到匹配的结束位置
---- 
 ---@param template string 完整的模板字符串
----@param start_pos integer 搜索起始位置（通常是开始标记的结束位置）
----@return integer|nil end_start 结束标记的开始位置
----@return integer|nil end_finish 结束标记的结束位置
---- 
----@usage
---- local template = "{% if true %}{% for i in list %}...{% endfor %}{% endif %}"
---- local end_start, end_finish = parser.find_block_end(template, 12)
-function M.find_block_end(template, start_pos)
-    -- 参数验证
-    if type(template) ~= "string" then
-        return nil
-    end
-    if type(start_pos) ~= "number" or start_pos < 1 then
-        return nil
+---@param start_pos integer 搜索起始位置
+---@param block_type? string 块类型，用于精确匹配
+---@return integer? end_start 结束标记的开始位置
+---@return integer? end_finish 结束标记的结束位置
+function M.find_block_end(template, start_pos, block_type)
+    if type(template) ~= "string" or type(start_pos) ~= "number" then
+        return nil, nil
     end
     
-    local depth = 1  -- 嵌套深度计数器
+    local depth = 1
     local pos = start_pos
+    local template_len = #template
     
-    -- 扫描模板，查找匹配的结束标记
-    while depth > 0 and pos <= #template do
-        -- 查找下一个控制标记
-        local tag_s, tag_e = template:find("{%%[^}]*%%}", pos)
-        if not tag_s or not tag_e then 
-            break  -- 没有更多标记，退出循环
+    local block_start = constants.SYNTAX.BLOCK_START
+    local block_end = constants.SYNTAX.BLOCK_END
+    
+    while pos <= template_len and depth > 0 do
+        -- 查找下一个块标记
+        local next_start = template:find(escape_pattern(block_start), pos, true)
+        if not next_start then
+            break
         end
         
-        -- 确保位置为整数（类型安全）
-        tag_s = math.floor(tag_s)
-        tag_e = math.floor(tag_e)
+        -- 查找对应的结束标记
+        local tag_end = template:find(escape_pattern(block_end), next_start, true)
+        if not tag_end then
+            break
+        end
         
-        -- 解析标记内容
-        local content = template:sub(tag_s + 2, tag_e - 2):match("^%s*(.-)%s*$")
-        local tag_name = content and content:match("^(%w+)") or ""
+        -- 提取标记内容
+        local tag_content = template:sub(next_start + #block_start, tag_end - 1)
+        local keyword = tag_content:match("^%s*(%w+)")
         
-        -- 更新嵌套深度
-        if constants.END_KEYWORDS[tag_name] then
-            depth = depth - 1
-            if depth == 0 then 
-                return tag_s, tag_e  -- 找到匹配的结束标记
+        if keyword then
+            -- 检查是否为开始标记
+            if constants.BLOCK_KEYWORDS[keyword] then
+                depth = depth + 1
+            -- 检查是否为结束标记
+            elseif constants.END_KEYWORDS[keyword] then
+                depth = depth - 1
+                
+                -- 如果找到匹配的结束标记
+                if depth == 0 then
+                    return next_start, tag_end + #block_end - 1
+                end
             end
-        elseif constants.BLOCK_KEYWORDS[tag_name] then
-            depth = depth + 1
         end
         
-        pos = tag_e + 1
+        pos = tag_end + #block_end
     end
     
-    return nil  -- 未找到匹配的结束标记
+    return nil, nil
 end
 
 --============================================================================
 -- 过滤器解析 - 处理复杂的过滤器链
 --============================================================================
 
---- 解析过滤器字符串
+--- 解析过滤器链
 --- 
---- 支持多种过滤器语法：
---- 1. 简单过滤器：variable|filter
---- 2. 带参数过滤器：variable|filter:arg 或 variable|filter(arg1,arg2)
---- 3. 过滤器链：variable|filter1|filter2:arg|filter3(arg1,arg2)
+--- 将形如 "user.name|upper|format('Hello %s')" 的文本解析为变量名和过滤器列表
 --- 
---- 解析过程：
---- 1. 按 | 分割过滤器链
---- 2. 第一部分是变量名
---- 3. 后续部分是过滤器和参数
---- 
----@param text string 包含过滤器的文本，如 "name|upper|format('Hello %s')"
----@return string key 变量名部分
----@return table filters 过滤器列表，每个元素包含 name 和 args
---- 
----@usage
---- local key, filters = parser.parse_filters("user.name|upper|format('Hello %s')")
---- -- key = "user.name"
---- -- filters = {{name="upper", args={}}, {name="format", args={"Hello %s"}}}
+---@param text string 要解析的文本
+---@return string key 变量名
+---@return table filters 过滤器列表，格式: {{name=string, args=table}, ...}
 function M.parse_filters(text)
-    -- 参数验证
     if type(text) ~= "string" or text == "" then
         return "", {}
     end
     
-    -- 按管道符分割过滤器链
-    local parts = {}
-    for part in text:gmatch("[^|]+") do
-        local trimmed = part:match("^%s*(.-)%s*$")  -- 去除首尾空格
-        if trimmed ~= "" then
-            table.insert(parts, trimmed)
-        end
+    -- 检查缓存
+    if filter_cache[text] then
+        local cached = filter_cache[text]
+        return cached[1], cached[2]
     end
+    
+    -- 按管道符分割过滤器链
+    local parts = utils.split_string(text, constants.SYNTAX.FILTER_SEPARATOR)
     
     if #parts == 0 then
         return "", {}
     end
     
-    local key = parts[1]  -- 第一部分是变量名
+    local key = utils.trim(parts[1])  -- 第一部分是变量名
     local filters = {}
     
     -- 解析每个过滤器（从第二部分开始）
     for i = 2, #parts do
-        local filter_part = parts[i]
+        local filter_part = utils.trim(parts[i])
         local filter_info = M.parse_single_filter(filter_part)
         
         if filter_info then
             table.insert(filters, filter_info)
         end
     end
+    
+    -- 缓存结果
+    filter_cache[text] = {key, filters}
+    cleanup_cache()
     
     return key, filters
 end
@@ -155,7 +208,7 @@ end
 --- 3. filter(a,b)    -> {name="filter", args={"a","b"}}
 --- 
 ---@param filter_text string 单个过滤器文本
----@return table|nil filter_info 过滤器信息，格式: {name=string, args=table}
+---@return table? filter_info 过滤器信息，格式: {name=string, args=table}
 function M.parse_single_filter(filter_text)
     if type(filter_text) ~= "string" or filter_text == "" then
         return nil
@@ -174,7 +227,8 @@ function M.parse_single_filter(filter_text)
     -- 尝试解析冒号语法：filter:arg
     name, args_str = filter_text:match("^([%w_]+)%s*:%s*(.+)$")
     if name and args_str then
-        local arg = M.parse_single_arg(args_str)
+        -- 智能解析参数：支持模板变量和普通参数
+        local arg = M.parse_smart_arg(args_str)
         return {name = name, args = {arg}}
     end
     
@@ -193,21 +247,24 @@ end
 --- - 字符串：'text' 或 "text"
 --- - 数字：123 或 12.34
 --- - 变量：variable_name
+--- - 嵌套模板：${variable}
 --- 
 ---@param args_str string 参数字符串，如 "'hello', 123, variable"
 ---@return table args 解析后的参数数组
 function M.parse_function_args(args_str)
-    local args = {}
-    
-    if not args_str or args_str == "" then
-        return args
+    if type(args_str) ~= "string" or args_str == "" then
+        return {}
     end
     
-    -- 简单的参数分割（不处理嵌套括号）
-    for arg in args_str:gmatch("([^,]+)") do
-        local trimmed_arg = arg:match("^%s*(.-)%s*$")
-        local parsed_arg = M.parse_single_arg(trimmed_arg)
-        table.insert(args, parsed_arg)
+    local args = {}
+    local parts = utils.split_string(args_str, constants.SYNTAX.ARG_SEPARATOR)
+    
+    for _, part in ipairs(parts) do
+        local trimmed = utils.trim(part)
+        if trimmed ~= "" then
+            local arg = M.parse_single_arg(trimmed)
+            table.insert(args, arg)
+        end
     end
     
     return args
@@ -215,35 +272,63 @@ end
 
 --- 解析单个参数
 --- 
+--- 支持字符串、数字、布尔值、变量名
+--- 
 ---@param arg_str string 参数字符串
 ---@return any parsed_arg 解析后的参数值
 function M.parse_single_arg(arg_str)
-    if not arg_str or arg_str == "" then
-        return ""
+    if type(arg_str) ~= "string" then
+        return arg_str
     end
     
-    -- 字符串参数：去除引号
-    if arg_str:match("^['\"].*['\"]$") then
-        return arg_str:sub(2, -2)
+    local trimmed = utils.trim(arg_str)
+    
+    -- 字符串字面量（单引号或双引号）
+    local string_content = trimmed:match("^'(.*)'$") or trimmed:match('^"(.*)"$')
+    if string_content then
+        return string_content
     end
     
-    -- 数字参数
-    local num = tonumber(arg_str)
-    if num then
-        return num
+    -- 数字字面量
+    local number_value = tonumber(trimmed)
+    if number_value then
+        return number_value
     end
     
-    -- 布尔参数
-    if arg_str == "true" then
+    -- 布尔字面量
+    if trimmed == "true" then
         return true
-    elseif arg_str == "false" then
+    elseif trimmed == "false" then
         return false
-    elseif arg_str == "nil" then
+    elseif trimmed == "nil" or trimmed == "null" then
         return nil
     end
     
-    -- 其他情况当作字符串处理
-    return arg_str
+    -- 其他情况视为变量名或原始字符串
+    return trimmed
+end
+
+--- 智能解析参数（支持嵌套模板变量）
+--- 
+---@param args_str string 参数字符串
+---@return any parsed_arg 解析后的参数值
+function M.parse_smart_arg(args_str)
+    if not args_str or args_str == "" then
+        return ""
+    end
+    
+    -- 检查是否为嵌套模板变量格式
+    if args_str:sub(1, 2) == constants.SYNTAX.VARIABLE_START and 
+       args_str:sub(-1) == constants.SYNTAX.VARIABLE_END then
+        -- 验证是否是有效的模板变量格式
+        local content = args_str:sub(3, -2)  -- 移除 ${ 和 }
+        if content and content ~= "" then
+            return {type = "nested_template", content = args_str}
+        end
+    end
+    
+    -- 其他情况使用原有解析逻辑
+    return M.parse_single_arg(args_str)
 end
 
 --============================================================================
@@ -256,71 +341,219 @@ end
 --- 1. 简单变量：${name}
 --- 2. 嵌套属性：${user.profile.name}
 --- 3. 过滤器链：${name|upper|format('Hello %s')}
---- 4. 宏调用：${macro_name(arg1, arg2)}
---- 
---- 替换过程：
---- 1. 使用正则表达式查找 ${...} 模式
---- 2. 解析内容：区分宏调用、过滤器、普通变量
---- 3. 求值并应用过滤器
---- 4. 格式化输出结果
+--- 4. 嵌套模板：${var|filter:${nested_var}}
 --- 
 ---@param template string 模板字符串
----@param env table 环境变量表，提供变量值
+---@param env table 环境变量表
 ---@return string result 替换后的字符串
---- 
----@usage
---- local result = parser.replace_variables("Hello ${name|upper}!", {name = "world"})
---- -- result = "Hello WORLD!"
 function M.replace_variables(template, env)
-    -- 参数验证
     if type(template) ~= "string" then
-        return ""
-    end
-    if type(env) ~= "table" then
-        env = {}
+        return tostring(template or "")
     end
     
-    -- 使用正则表达式查找并替换所有 ${...} 模式
-    local result = template:gsub("%${([^}]+)}", function(content)
-        return M.process_variable_content(content, env)
-    end)
+    if not template:find(constants.SYNTAX.VARIABLE_START, 1, true) then
+        return template
+    end
+    
+    -- 预处理嵌套模板语法
+    -- 处理形如 ${outer[${inner}]} 的嵌套语法
+    local function preprocess_nested_templates(text)
+        local result = text
+        local max_iterations = 10 -- 防止无限循环
+        local iteration = 0
+        
+        while iteration < max_iterations do
+            iteration = iteration + 1
+            local changed = false
+            
+            -- 查找嵌套模板模式：${...${...}...}
+            -- 只处理真正包含嵌套的模板，不处理独立的简单模板
+            local nested_start = result:find("${[^{}]*${[^{}]*}[^{}]*}")
+            if nested_start then
+                -- 找到嵌套模板，查找最内层的简单变量
+                local innermost_start, innermost_end = result:find("${[^{}]*}", nested_start)
+                if innermost_start then
+                    local inner_template = result:sub(innermost_start, innermost_end)
+                    local inner_content = inner_template:sub(3, -2) -- 去掉 ${ 和 }
+                    
+                    -- 只处理简单变量（不包含 | 和 [ ）
+                    if not inner_content:find("[|%[]") then
+                        local inner_value = utils.get_nested_value(env, inner_content)
+                        if inner_value then
+                            local replacement = tostring(inner_value)
+                            result = result:sub(1, innermost_start - 1) .. replacement .. result:sub(innermost_end + 1)
+                            changed = true
+                        end
+                    end
+                end
+            end
+            
+            if not changed then
+                break
+            end
+        end
+        
+        return result
+    end
+    
+    -- 应用嵌套模板预处理
+    template = preprocess_nested_templates(template)
+    
+    -- 智能提取 ${...} 内容，支持嵌套括号
+    local function extract_template_content(text, start_pos)
+        local var_start = constants.SYNTAX.VARIABLE_START
+        if text:sub(start_pos, start_pos + #var_start - 1) ~= var_start then
+            return nil, start_pos
+        end
+        
+        local pos = start_pos + #constants.SYNTAX.VARIABLE_START
+        local brace_count = 1
+        local content_start = pos
+        
+        while pos <= #text and brace_count > 0 do
+            local char = text:sub(pos, pos)
+            if char == "{" then
+                brace_count = brace_count + 1
+            elseif char == "}" then
+                brace_count = brace_count - 1
+            end
+            pos = pos + 1
+        end
+        
+        if brace_count == 0 then
+            local content = text:sub(content_start, pos - 2)  -- 不包含最后的 }
+            return content, pos
+        else
+            -- 未找到匹配的右括号
+            return nil, start_pos + #constants.SYNTAX.VARIABLE_START
+        end
+    end
+    
+    local result = template
+    local pos = 1
+    
+    while pos <= #result do
+        local dollar_pos = result:find(constants.SYNTAX.VARIABLE_START, pos, true)
+        if not dollar_pos then
+            break
+        end
+        
+        local content, next_pos = extract_template_content(result, dollar_pos)
+        if content then
+            local key, filters = M.parse_filters(content)
+            
+            -- 获取变量值
+            local value = get_variable_value(key, env)
+            
+            -- 应用过滤器链
+            for _, filter in ipairs(filters) do
+                value = M.apply_filter(value, filter, env)
+            end
+            
+            -- 替换模板内容
+            local full_template = constants.SYNTAX.VARIABLE_START .. content .. constants.SYNTAX.VARIABLE_END
+            
+            -- 智能字符串化
+            local replacement
+            if value == nil then
+                replacement = ""
+            elseif type(value) == "table" then
+                -- 对于table类型，提供更有用的表示
+                -- 如果table有name字段，优先显示
+                if value.name then
+                    replacement = tostring(value.name)
+                elseif #value > 0 then
+                    -- 如果是数组，显示数组内容概要
+                    if #value <= 3 then
+                        local items = {}
+                        for i = 1, #value do
+                            table.insert(items, tostring(value[i]))
+                        end
+                        replacement = "[" .. table.concat(items, ",") .. "]"
+                    else
+                        replacement = "[" .. tostring(value[1]) .. ",...(" .. #value .. " items)]"
+                    end
+                else
+                    -- 否则显示JSON格式（简化版）
+                    local json_parts = {}
+                    for k, v in pairs(value) do
+                        if type(k) == "string" and type(v) ~= "table" and type(v) ~= "function" then
+                            table.insert(json_parts, k .. ":" .. tostring(v))
+                        end
+                    end
+                    if #json_parts > 0 then
+                        replacement = "{" .. table.concat(json_parts, ",") .. "}"
+                    else
+                        replacement = "{object}"
+                    end
+                end
+            else
+                replacement = tostring(value)
+            end
+            
+            -- 使用简单的字符串替换，避免模式匹配问题
+            local before = result:sub(1, dollar_pos - 1)
+            local after = result:sub(dollar_pos + #full_template)
+            result = before .. replacement .. after
+            
+            -- 更新位置
+            pos = dollar_pos + #replacement
+        else
+            pos = next_pos
+        end
+    end
     
     return result
 end
 
---- 处理单个变量内容
---- 
----@param content string 变量内容（去除 ${ } 包装）
----@param env table 环境变量表
----@return string result 处理后的结果
-function M.process_variable_content(content, env)
-    -- 去除首尾空格
-    content = content:match("^%s*(.-)%s*$") or ""
-    
-    if content == "" then
-        return ""
+--============================================================================
+-- 过滤器应用
+--============================================================================
+
+--- 应用过滤器
+---@param value any 要过滤的值
+---@param filter table 过滤器信息
+---@param env table 环境变量表 (用于嵌套模板)
+---@return any result 过滤器处理后的值
+function M.apply_filter(value, filter, env)
+    local filter_func = get_filter_function(filter.name)
+    if filter_func then
+        -- 处理嵌套模板参数
+        local processed_args = {}
+        for i, arg in ipairs(filter.args) do
+            processed_args[i] = M.process_nested_template_arg(arg, env)
+        end
+        
+        return filter_func(value, table.unpack(processed_args))
+    else
+        -- 过滤器不存在，返回原值
+        return value
     end
-    
-    -- 检查是否是宏调用：macro_name(arg1, arg2, ...)
-    local macro_name, args_str = content:match("^([%w_]+)%s*%((.*)%)%s*$")
-    if macro_name then
-        return M.process_macro_call(macro_name, args_str, env)
-    end
-    
-    -- 解析变量名和过滤器链
-    local key, filters = M.parse_filters(content)
-    
-    -- 获取变量值
-    local value = utils.get_env_value(env, key)
-    
-    -- 应用过滤器链
-    for _, filter in ipairs(filters) do
-        value = M.apply_filter(value, filter)
-    end
-    
-    -- 格式化输出
-    return M.format_output(value, content)
 end
+
+--- 处理嵌套模板参数
+--- 
+--- 只处理无引号的嵌套模板语法 ${variable}
+--- 
+---@param arg any 原始参数
+---@param env table 环境变量表
+---@return any processed_arg 处理后的参数
+function M.process_nested_template_arg(arg, env)
+    -- 处理无引号的嵌套模板对象
+    if type(arg) == "table" and arg.type == "nested_template" then
+        if env then
+            return M.replace_variables(arg.content, env)
+        end
+        return arg.content
+    end
+    
+    -- 其他情况直接返回原参数
+    return arg
+end
+
+--============================================================================
+-- 宏和函数调用
+--============================================================================
 
 --- 处理宏调用
 --- 
@@ -333,10 +566,10 @@ function M.process_macro_call(macro_name, args_str, env)
     local args = {}
     if args_str and args_str ~= "" then
         for arg in args_str:gmatch("[^,]+") do
-            local trimmed_arg = arg:match("^%s*(.-)%s*$")
+            local trimmed_arg = utils.trim(arg)
             
             -- 尝试作为表达式求值
-            local value, eval_error = utils.eval(trimmed_arg, env)
+            local value, eval_error = utils.safe_eval(trimmed_arg, env)
             if not eval_error then
                 table.insert(args, value)
             else
@@ -354,56 +587,39 @@ function M.process_macro_call(macro_name, args_str, env)
         return result or ""
     else
         -- 宏调用失败，返回原始内容
-        return "${" .. macro_name .. "(" .. (args_str or "") .. ")}"
+        return constants.SYNTAX.VARIABLE_START .. macro_name .. "(" .. (args_str or "") .. ")" .. constants.SYNTAX.VARIABLE_END
     end
 end
 
---- 应用单个过滤器
---- 
----@param value any 输入值
----@param filter table 过滤器信息 {name=string, args=table}
----@return any result 过滤器处理后的值
-function M.apply_filter(value, filter)
-    local filter_func = filter_mod.get_filter(filter.name)
-    if filter_func then
-        return filter_func(value, table.unpack(filter.args))
-    else
-        -- 过滤器不存在，返回原值
-        return value
-    end
+--============================================================================
+-- 缓存管理
+--============================================================================
+
+--- 清空解析缓存
+function M.clear_cache()
+    parse_cache = {}
+    filter_cache = {}
 end
 
---- 格式化输出值
---- 
---- 将过滤器处理后的值转换为字符串输出。
---- 对不同类型的值采用不同的格式化策略。
---- 
----@param value any 要格式化的值
----@param original_content string 原始内容（用于错误时的回退）
----@return string formatted 格式化后的字符串
-function M.format_output(value, original_content)
-    if value == nil then
-        -- 值为 nil，返回原始内容
-        return "${" .. original_content .. "}"
-    elseif type(value) == "table" then
-        -- 表类型：尝试转换为可读格式
-        local success, result = pcall(function()
-            if #value > 0 then
-                -- 数组类型：用逗号分隔
-                return "[" .. table.concat(value, ", ") .. "]"
-            else
-                -- 对象类型：显示类型信息
-                return "[object Object]"
-            end
-        end)
-        return success and result or "[object Object]"
-    elseif type(value) == "boolean" then
-        -- 布尔类型：转换为字符串
-        return tostring(value)
-    else
-        -- 其他类型：直接转换为字符串
-        return tostring(value)
+--- 获取缓存统计信息
+---@return table stats 缓存统计
+function M.get_cache_stats()
+    local parse_count = 0
+    local filter_count = 0
+    
+    for _ in pairs(parse_cache) do
+        parse_count = parse_count + 1
     end
+    
+    for _ in pairs(filter_cache) do
+        filter_count = filter_count + 1
+    end
+    
+    return {
+        parse_cache_size = parse_count,
+        filter_cache_size = filter_count,
+        total_cache_size = parse_count + filter_count
+    }
 end
 
 return M

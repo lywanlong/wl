@@ -50,6 +50,46 @@ M.add_filter('lower', function(str)
 end)
 
 --============================================================================
+-- 默认值过滤器
+--============================================================================
+
+-- 提供默认值
+-- 当值为 nil、空字符串或空白字符串时，使用默认值
+-- 用法：${variable|default:"默认值"} 或 ${variable|default:fallback_var}
+M.add_filter('default', function(value, default_value)
+    -- 检查值是否为空或需要替换
+    if value == nil then
+        return default_value or ""
+    end
+    
+    if type(value) == "string" then
+        if value == "" or value:match("^%s*$") then
+            return default_value or ""
+        end
+    end
+    
+    return value
+end)
+
+-- 提供非空默认值（只有当值为 nil 时才使用默认值）
+-- 用法：${variable|default_if_nil:"默认值"}
+M.add_filter('default_if_nil', function(value, default_value)
+    if value == nil then
+        return default_value or ""
+    end
+    return value
+end)
+
+-- 提供非空字符串默认值（当值为 nil 或空字符串时使用默认值）
+-- 用法：${variable|default_if_empty:"默认值"}
+M.add_filter('default_if_empty', function(value, default_value)
+    if value == nil or value == "" then
+        return default_value or ""
+    end
+    return value
+end)
+
+--============================================================================
 -- 日期时间过滤器
 --============================================================================
 

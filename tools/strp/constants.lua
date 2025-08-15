@@ -1,63 +1,124 @@
 --============================================================================
--- STRP 模板引擎 - 常量定义模块
+-- STRP 模板引擎 - 配置常量 v2.1
+--
+-- 统一管理所有配置参数，便于性能调优和功能扩展
 -- 
--- 集中管理模板引擎的所有常量配置：
--- • 关键字定义：控制结构的开始和结束标记
--- • 性能参数：缓存大小、循环限制等
--- • 语法配置：标记符号、分隔符等
--- 
--- 设计目标：
--- • 易于维护：所有配置集中管理
--- • 易于扩展：添加新语法时只需修改此文件
--- • 性能优化：合理的默认值和限制
+-- 模块职责：
+-- • 缓存配置：控制缓存行为和性能参数
+-- • 语法配置：定义模板语法标记和分隔符
+-- • 性能参数：设置各种性能相关的阈值
+-- • 安全配置：控制安全相关的限制参数
+-- • 默认值：提供合理的默认配置
 --============================================================================
 
----@class StrpConstants 常量定义模块
+---@class StrpConstants 配置常量模块
+---@field CACHE StrpCacheConfig 缓存相关配置
+---@field SYNTAX StrpSyntaxConfig 语法相关配置  
+---@field PERFORMANCE StrpPerformanceConfig 性能相关配置
+---@field SECURITY StrpSecurityConfig 安全相关配置
+---@field VERSION string 版本信息
 local M = {}
 
 --============================================================================
--- 语法关键字定义
+-- 版本信息
 --============================================================================
 
+M.VERSION = "2.1.0"
+
+--============================================================================
+-- 缓存配置
+--============================================================================
+
+---@class StrpCacheConfig
+M.CACHE = {
+    -- 最大缓存条目数 (LRU淘汰策略)
+    MAX_ENTRIES = 1000,
+    
+    -- 自动清理周期 (单位：秒)
+    CLEANUP_INTERVAL = 300,
+    
+    -- 缓存生存时间 (单位：秒，0表示永不过期)
+    TTL = 0,
+    
+    -- 缓存键最大长度 (防止内存溢出)
+    MAX_KEY_LENGTH = 256,
+    
+    -- 是否启用缓存统计
+    ENABLE_STATS = true,
+    
+    -- 是否启用缓存压缩
+    ENABLE_COMPRESSION = false
+}
+
+--============================================================================
+-- 语法配置
+--============================================================================
+
+---@class StrpSyntaxConfig
+M.SYNTAX = {
+    -- 变量标记
+    VARIABLE_START = "${",
+    VARIABLE_END = "}",
+    
+    -- 控制结构标记
+    BLOCK_START = "{%",
+    BLOCK_END = "%}",
+    
+    -- 注释标记
+    COMMENT_START = "{#",
+    COMMENT_END = "#}",
+    
+    -- 过滤器分隔符
+    FILTER_SEPARATOR = "|",
+    FILTER_ARG_SEPARATOR = ":",
+    
+    -- 参数分隔符
+    ARG_SEPARATOR = ",",
+    
+    -- 转义字符
+    ESCAPE_CHAR = "\\",
+    
+    -- 字符串引号
+    STRING_QUOTES = {"'", '"'},
+    
+    -- 关键字列表
+    KEYWORDS = {
+        -- 控制结构
+        "if", "elif", "else", "endif",
+        "for", "endfor", "in",
+        "while", "endwhile",
+        "with", "endwith",
+        "macro", "endmacro",
+        "try", "except", "finally", "endtry",
+        "switch", "case", "default", "endswitch",
+        "include", "extends", "block", "endblock",
+        
+        -- 逻辑操作符
+        "and", "or", "not",
+        "is", "in", "not_in",
+        
+        -- 内置常量
+        "true", "false", "nil", "null"
+    }
+}
+
 --- 开启新块的关键字映射表
---- 
---- 这些关键字会开启一个新的代码块，需要相应的结束关键字来闭合。
---- 支持嵌套使用，解析器会正确处理嵌套层级。
---- 
 ---@type table<string, boolean>
 M.BLOCK_KEYWORDS = {
-    -- 条件控制
     ["if"] = true,       -- 条件判断：{% if condition %}...{% endif %}
     ["unless"] = true,   -- 反向条件：{% unless condition %}...{% endunless %}
-    
-    -- 循环控制  
     ["for"] = true,      -- 遍历循环：{% for item in list %}...{% endfor %}
     ["while"] = true,    -- 条件循环：{% while condition %}...{% endwhile %}
-    
-    -- 分支控制
     ["switch"] = true,   -- 多分支选择：{% switch value %}...{% endswitch %}
-    
-    -- 作用域控制
     ["with"] = true,     -- 局部作用域：{% with expr as var %}...{% endwith %}
-    
-    -- 错误处理
     ["try"] = true,      -- 异常处理：{% try %}...{% catch %}...{% endtry %}
-    
-    -- 代码复用
     ["macro"] = true,    -- 宏定义：{% macro name(args) %}...{% endmacro %}
 }
 
 --- 结束块的关键字映射表
---- 
---- 与 BLOCK_KEYWORDS 一一对应，用于闭合相应的代码块。
---- 解析器通过这些关键字确定块的边界。
---- 
 ---@type table<string, boolean>
 M.END_KEYWORDS = {
-    -- 通用结束标记
     ["end"] = true,        -- 通用结束：可以结束任何块
-    
-    -- 特定结束标记（更明确，推荐使用）
     ["endif"] = true,      -- 结束 if 块
     ["endunless"] = true,  -- 结束 unless 块
     ["endfor"] = true,     -- 结束 for 块
@@ -69,150 +130,201 @@ M.END_KEYWORDS = {
 }
 
 --============================================================================
--- 性能和安全限制
+-- 性能配置
 --============================================================================
 
---- 最大循环迭代次数
---- 
---- 防止无限循环导致程序卡死。当 while 循环超过此次数时，
---- 会抛出错误并终止执行。
---- 
---- 注意：这是一个安全限制，不是性能优化。正常业务逻辑
---- 应该避免接近这个限制。
---- 
----@type integer
-M.MAX_LOOP_ITERATIONS = 10000
-
---- 最大模板缓存大小
---- 
---- 限制编译后模板的缓存数量，避免内存无限增长。
---- 当缓存达到此大小时，会触发 LRU 清理，删除一半缓存。
---- 
---- 建议值：
---- - 小型应用：50-100
---- - 中型应用：200-500  
---- - 大型应用：1000+
---- 
----@type integer
-M.MAX_CACHE_SIZE = 100
-
---- 最大递归深度
---- 
---- 防止模板递归包含或宏调用导致栈溢出。
---- include 和宏调用会检查此限制。
---- 
----@type integer
-M.MAX_RECURSION_DEPTH = 50
-
---- 最大变量路径长度
---- 
---- 限制 ${obj.prop.subprop...} 的最大层级数，
---- 防止恶意或错误的深层嵌套访问。
---- 
----@type integer
-M.MAX_PROPERTY_DEPTH = 20
-
---============================================================================
--- 语法标记配置
---============================================================================
-
---- 模板标记配置
---- 
---- 定义模板中各种标记的格式，便于统一修改和扩展。
---- 
----@class TemplateSyntax
-M.SYNTAX = {
-    -- 变量标记：${variable}
-    VARIABLE_START = "${",
-    VARIABLE_END = "}",
+---@class StrpPerformanceConfig
+M.PERFORMANCE = {
+    -- 最大递归深度 (防止栈溢出)
+    MAX_RECURSION_DEPTH = 100,
     
-    -- 控制标记：{% tag %}
-    CONTROL_START = "{%",
-    CONTROL_END = "%}",
+    -- 最大模板大小 (单位：字节)
+    MAX_TEMPLATE_SIZE = 1024 * 1024,  -- 1MB
     
-    -- 注释标记：{# comment #}
-    COMMENT_START = "{#",
-    COMMENT_END = "#}",
+    -- 最大输出大小 (单位：字节)
+    MAX_OUTPUT_SIZE = 10 * 1024 * 1024,  -- 10MB
     
-    -- 过滤器分隔符：variable|filter
-    FILTER_SEPARATOR = "|",
+    -- 最大循环次数 (防止无限循环)
+    MAX_LOOP_ITERATIONS = 10000,
     
-    -- 参数分隔符：filter:arg 或 filter(arg1,arg2)
-    PARAM_SEPARATOR = ":",
-    PARAM_START = "(",
-    PARAM_END = ")",
-    PARAM_DELIMITER = ",",
+    -- 表达式求值超时 (单位：毫秒)
+    EVAL_TIMEOUT = 5000,
+    
+    -- 内存使用监控阈值 (单位：MB)
+    MEMORY_WARNING_THRESHOLD = 100,
+    
+    -- 是否启用性能分析
+    ENABLE_PROFILING = false,
+    
+    -- 批处理大小
+    BATCH_SIZE = 100,
+    
+    -- 最大模板缓存大小
+    MAX_CACHE_SIZE = 100
 }
 
 --============================================================================
--- 错误消息模板
+-- 安全配置
 --============================================================================
 
---- 常用错误消息模板
---- 
---- 统一错误消息格式，提升用户体验和调试效率。
---- 
----@type table<string, string>
-M.ERROR_MESSAGES = {
-    SYNTAX_ERROR = "语法错误: %s",
-    UNDEFINED_VARIABLE = "未定义的变量: %s",
-    UNDEFINED_FILTER = "未定义的过滤器: %s", 
-    UNDEFINED_MACRO = "未定义的宏: %s",
-    INFINITE_LOOP = "检测到无限循环，已终止执行",
-    RECURSION_LIMIT = "递归深度超过限制 (%d)",
-    TYPE_ERROR = "类型错误: 期望 %s，实际 %s",
-    CACHE_FULL = "模板缓存已满，正在清理",
+---@class StrpSecurityConfig
+M.SECURITY = {
+    -- 是否启用XSS防护
+    ENABLE_XSS_PROTECTION = true,
+    
+    -- 是否启用表达式沙箱
+    ENABLE_SANDBOX = true,
+    
+    -- 允许的函数白名单
+    ALLOWED_FUNCTIONS = {
+        -- 数学函数
+        "math.abs", "math.ceil", "math.floor", "math.max", "math.min",
+        "math.sqrt", "math.sin", "math.cos", "math.tan",
+        
+        -- 字符串函数
+        "string.len", "string.sub", "string.upper", "string.lower",
+        "string.gsub", "string.match", "string.find",
+        
+        -- 表格函数
+        "table.insert", "table.remove", "table.sort", "table.concat",
+        
+        -- 类型检查
+        "type", "tostring", "tonumber",
+        
+        -- 日期时间
+        "os.date", "os.time"
+    },
+    
+    -- 禁止的函数黑名单
+    FORBIDDEN_FUNCTIONS = {
+        -- 文件操作
+        "io.open", "io.read", "io.write", "io.close",
+        "io.input", "io.output", "io.flush",
+        
+        -- 系统操作
+        "os.execute", "os.remove", "os.rename", "os.exit",
+        "os.getenv", "os.setlocale",
+        
+        -- 模块加载
+        "require", "dofile", "loadfile", "load", "loadstring",
+        
+        -- 调试接口
+        "debug.getinfo", "debug.getlocal", "debug.setlocal",
+        "debug.getupvalue", "debug.setupvalue",
+        
+        -- 垃圾收集
+        "collectgarbage"
+    },
+    
+    -- 最大变量名长度
+    MAX_VARIABLE_NAME_LENGTH = 64,
+    
+    -- 最大字符串长度
+    MAX_STRING_LENGTH = 65536,
+    
+    -- 是否允许动态代码执行
+    ALLOW_DYNAMIC_EXECUTION = false
 }
 
 --============================================================================
--- 调试和开发配置
+-- 默认选项
 --============================================================================
 
---- 调试模式配置
---- 
---- 在开发环境中启用更详细的错误信息和性能监控。
---- 生产环境建议关闭以提升性能。
---- 
----@class DebugConfig
-M.DEBUG = {
+---@class StrpDefaultOptions
+M.DEFAULT_OPTIONS = {
+    -- 是否启用缓存
+    cache = true,
+    
     -- 是否启用调试模式
-    ENABLED = false,
+    debug = false,
     
-    -- 是否记录性能指标
-    PROFILE = false,
+    -- 是否启用严格模式
+    strict = false,
     
-    -- 是否显示未知标签警告
-    WARN_UNKNOWN_TAGS = false,
+    -- 是否自动转义
+    autoescape = true,
     
-    -- 是否验证模板语法
-    VALIDATE_SYNTAX = true,
+    -- 默认编码
+    encoding = "utf-8",
+    
+    -- 错误处理策略 ("strict", "ignore", "replace")
+    error_handling = "strict",
+    
+    -- 输出格式 ("string", "table")
+    output_format = "string",
+    
+    -- 是否保留空白字符
+    preserve_whitespace = false,
+    
+    -- 变量未定义时的处理 ("error", "empty", "keep")
+    undefined_behavior = "error"
 }
 
 --============================================================================
--- 特性开关
+-- 工具函数
 --============================================================================
 
---- 功能特性开关
---- 
---- 控制各种高级特性的启用状态，便于渐进式启用新功能
---- 或在出现问题时快速关闭某些特性。
---- 
----@class FeatureFlags
-M.FEATURES = {
-    -- 是否启用宏功能
-    MACROS = true,
+--- 获取深拷贝的默认选项
+---@return table options 默认选项的深拷贝
+function M.get_default_options()
+    local function deep_copy(obj)
+        if type(obj) ~= "table" then
+            return obj
+        end
+        local copy = {}
+        for k, v in pairs(obj) do
+            copy[k] = deep_copy(v)
+        end
+        return copy
+    end
+    return deep_copy(M.DEFAULT_OPTIONS)
+end
+
+--- 合并选项配置
+---@param user_options table 用户提供的选项
+---@param base_options? table 基础选项，默认为DEFAULT_OPTIONS
+---@return table merged_options 合并后的选项
+function M.merge_options(user_options, base_options)
+    base_options = base_options or M.DEFAULT_OPTIONS
+    local merged = M.get_default_options()
     
-    -- 是否启用高级过滤器
-    ADVANCED_FILTERS = true,
+    if type(user_options) == "table" then
+        for k, v in pairs(user_options) do
+            merged[k] = v
+        end
+    end
     
-    -- 是否启用错误处理（try-catch）
-    ERROR_HANDLING = true,
+    return merged
+end
+
+--- 验证配置参数
+---@param config table 配置参数
+---@return boolean valid 是否有效
+---@return string? error_msg 错误信息
+function M.validate_config(config)
+    if type(config) ~= "table" then
+        return false, "配置必须是一个表"
+    end
     
-    -- 是否启用缓存功能
-    CACHING = true,
+    -- 验证缓存配置
+    if config.cache and type(config.cache) ~= "boolean" then
+        return false, "cache选项必须是布尔值"
+    end
     
-    -- 是否启用性能优化
-    PERFORMANCE_OPTIMIZATIONS = true,
-}
+    -- 验证调试配置
+    if config.debug and type(config.debug) ~= "boolean" then
+        return false, "debug选项必须是布尔值"
+    end
+    
+    -- 验证错误处理策略
+    if config.error_handling then
+        local valid_strategies = {strict = true, ignore = true, replace = true}
+        if not valid_strategies[config.error_handling] then
+            return false, "error_handling必须是'strict'、'ignore'或'replace'之一"
+        end
+    end
+    
+    return true
+end
 
 return M
