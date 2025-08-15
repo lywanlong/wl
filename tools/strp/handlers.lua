@@ -12,6 +12,9 @@ local M = {}
 -- 前向声明主解析函数
 local parse_template
 
+-- 宏定义存储
+local macro_definitions = {}
+
 --- 设置主解析函数的引用
 ---@param func function 主解析函数
 function M.set_parse_template(func)
@@ -115,6 +118,301 @@ function M.handle_for(template, env, tag_end, code)
     end
     
     return "", end_e + 1
+end
+
+--- 处理 while 循环块
+---@param template string 模板字符串
+---@param env table 环境变量
+---@param tag_end integer while 标签的结束位置
+---@param code string 循环条件表达式
+---@return string result 处理结果
+---@return integer next_pos 下一个处理位置
+function M.handle_while(template, env, tag_end, code)
+    local end_s, end_e = parser.find_block_end(template, tag_end + 1)
+    if not end_s then
+        utils.error_with_context("while 块未正确关闭", template, tag_end)
+    end
+    
+    local block = template:sub(tag_end + 1, end_s - 1)
+    local result = {}
+    local iterations = 0
+    
+    -- 安全循环：限制最大迭代次数
+    while iterations < constants.MAX_LOOP_ITERATIONS do
+        local condition, eval_error = utils.eval(code, env)
+        if eval_error then
+            utils.error_with_context("while 条件计算错误: " .. eval_error, template, tag_end)
+        end
+        
+        if not condition then
+            break
+        end
+        
+        table.insert(result, parse_template(block, env))
+        iterations = iterations + 1
+    end
+    
+    -- 检查是否因为超出最大迭代次数而退出
+    if iterations >= constants.MAX_LOOP_ITERATIONS then
+        utils.error_with_context("while 循环超出最大迭代次数限制 (" .. constants.MAX_LOOP_ITERATIONS .. ")", template, tag_end)
+    end
+    
+    return table.concat(result), end_e + 1
+end
+
+--- 处理 with 作用域块
+---@param template string 模板字符串
+---@param env table 环境变量
+---@param tag_end integer with 标签的结束位置
+---@param code string 作用域表达式
+---@return string result 处理结果
+---@return integer next_pos 下一个处理位置
+function M.handle_with(template, env, tag_end, code)
+    local end_s, end_e = parser.find_block_end(template, tag_end + 1)
+    if not end_s then
+        utils.error_with_context("with 块未正确关闭", template, tag_end)
+    end
+    
+    local block = template:sub(tag_end + 1, end_s - 1)
+    
+    -- 解析 with 语法：支持 "expr as var" 和 "var = expr" 两种形式
+    local var_name, expr
+    
+    -- 尝试 "expr as var" 格式
+    local as_match = code:match("(.+)%s+as%s+([%w_]+)")
+    if as_match then
+        expr = as_match:match("^%s*(.-)%s*$")
+        var_name = code:match("as%s+([%w_]+)%s*$")
+    else
+        -- 尝试 "var = expr" 格式
+        var_name, expr = code:match("([%w_]+)%s*=%s*(.+)")
+    end
+    
+    if not var_name or not expr then
+        utils.error_with_context("with 语法错误，应使用 'expr as var' 或 'var = expr' 格式", template, tag_end)
+    end
+    
+    -- 计算表达式值
+    local value, eval_error = utils.eval(expr, env)
+    if eval_error then
+        utils.error_with_context("with 表达式计算错误: " .. eval_error, template, tag_end)
+    end
+    
+    -- 创建新的作用域环境
+    local new_env = setmetatable({[var_name] = value}, {__index = env})
+    
+    -- 在新作用域中渲染块内容
+    local result = parse_template(block, new_env)
+    
+    return result, end_e + 1
+end
+
+--- 解析 try-catch 块内容
+---@param block string try 块内容
+---@return string try_content try 部分内容
+---@return string? catch_content catch 部分内容
+---@return string? error_var 错误变量名
+local function parse_try_catch_block(block)
+    local pos = 1
+    local depth = 0
+    local catch_start = nil
+    local catch_tag_start = nil
+    local error_var = nil
+    
+    while pos <= #block do
+        local tag_s, tag_e = block:find("{%%[^}]*%%}", pos)
+        if not tag_s or not tag_e then
+            break
+        end
+        
+        tag_s = math.floor(tag_s)
+        tag_e = math.floor(tag_e)
+        
+        local content = block:sub(tag_s + 2, tag_e - 2):match("^%s*(.-)%s*$")
+        local tag_name, tag_code = content:match("^(%w+)%s*(.*)")
+        
+        -- 处理嵌套深度
+        if constants.BLOCK_KEYWORDS[tag_name] then
+            depth = depth + 1
+        elseif constants.END_KEYWORDS[tag_name] then
+            depth = depth - 1
+        elseif depth == 0 and tag_name == "catch" then
+            -- 找到同级的 catch 标签
+            catch_tag_start = tag_s
+            catch_start = tag_e + 1
+            if tag_code and tag_code ~= "" then
+                error_var = tag_code:match("([%w_]+)")
+            end
+            break
+        end
+        
+        pos = tag_e + 1
+    end
+    
+    if catch_start and catch_tag_start then
+        return block:sub(1, catch_tag_start - 1), block:sub(catch_start), error_var
+    else
+        return block, nil, nil
+    end
+end
+
+--- 处理 try-catch 错误处理块
+---@param template string 模板字符串
+---@param env table 环境变量
+---@param tag_end integer try 标签的结束位置
+---@param code string try 表达式（通常为空）
+---@return string result 处理结果
+---@return integer next_pos 下一个处理位置
+function M.handle_try(template, env, tag_end, code)
+    local end_s, end_e = parser.find_block_end(template, tag_end + 1)
+    if not end_s then
+        utils.error_with_context("try 块未正确关闭", template, tag_end)
+    end
+    
+    local block = template:sub(tag_end + 1, end_s - 1)
+    
+    -- 查找 catch 分隔符
+    local try_content, catch_content, error_var = parse_try_catch_block(block)
+    
+    -- 尝试执行 try 块
+    local success, result = pcall(parse_template, try_content, env)
+    
+    if success then
+        -- try 块执行成功
+        return result, end_e + 1
+    else
+        -- 发生错误，执行 catch 块
+        if catch_content then
+            local catch_env = env
+            if error_var then
+                -- 将错误信息注入到 catch 环境中
+                catch_env = setmetatable({[error_var] = result}, {__index = env})
+            end
+            
+            local catch_result = parse_template(catch_content, catch_env)
+            return catch_result, end_e + 1
+        else
+            -- 没有 catch 块，返回空字符串（静默处理错误）
+            return "", end_e + 1
+        end
+    end
+end
+
+--- 处理 macro 宏定义块
+---@param template string 模板字符串
+---@param env table 环境变量
+---@param tag_end integer macro 标签的结束位置
+---@param code string 宏定义表达式
+---@return string result 处理结果（宏定义不产生输出）
+---@return integer next_pos 下一个处理位置
+function M.handle_macro(template, env, tag_end, code)
+    local end_s, end_e = parser.find_block_end(template, tag_end + 1)
+    if not end_s then
+        utils.error_with_context("macro 块未正确关闭", template, tag_end)
+    end
+    
+    local block = template:sub(tag_end + 1, end_s - 1)
+    
+    -- 解析宏定义：macro name(param1, param2, ...)
+    local macro_name, params_str = code:match("^([%w_]+)%s*%((.*)%)%s*$")
+    if not macro_name then
+        -- 尝试无参数宏：macro name
+        macro_name = code:match("^([%w_]+)%s*$")
+        params_str = ""
+    end
+    
+    if not macro_name then
+        utils.error_with_context("macro 语法错误，应使用 'macro name(param1, param2)' 格式", template, tag_end)
+    end
+    
+    -- 解析参数列表
+    local params = {}
+    local defaults = {}
+    
+    if params_str and params_str ~= "" then
+        for param in params_str:gmatch("[^,]+") do
+            param = param:match("^%s*(.-)%s*$") -- 去除首尾空格
+            
+            -- 检查是否有默认值：param=default
+            local param_name, default_value = param:match("^([%w_]+)%s*=%s*(.+)$")
+            if param_name then
+                table.insert(params, param_name)
+                defaults[param_name] = default_value
+            else
+                -- 无默认值的参数
+                param_name = param:match("^([%w_]+)$")
+                if param_name then
+                    table.insert(params, param_name)
+                else
+                    utils.error_with_context("macro 参数格式错误: " .. param, template, tag_end)
+                end
+            end
+        end
+    end
+    
+    -- 存储宏定义
+    macro_definitions[macro_name] = {
+        params = params,
+        defaults = defaults,
+        body = block
+    }
+    
+    -- 宏定义不产生输出
+    return "", end_e + 1
+end
+
+--- 调用宏
+---@param macro_name string 宏名称
+---@param args table 参数列表
+---@param env table 当前环境
+---@return string? result 宏展开结果
+---@return string? error 错误信息（如果有）
+function M.call_macro(macro_name, args, env)
+    local macro_def = macro_definitions[macro_name]
+    if not macro_def then
+        return nil, "未定义的宏: " .. macro_name
+    end
+    
+    -- 创建宏的局部环境
+    local macro_env = setmetatable({}, {__index = env})
+    
+    -- 设置参数值
+    for i, param_name in ipairs(macro_def.params) do
+        local arg_value = args[i]
+        
+        -- 如果没有提供参数，使用默认值
+        if arg_value == nil and macro_def.defaults[param_name] then
+            local default_val, eval_error = utils.eval(macro_def.defaults[param_name], env)
+            if eval_error then
+                return nil, "宏默认参数计算错误: " .. eval_error
+            end
+            arg_value = default_val
+        end
+        
+        macro_env[param_name] = arg_value
+    end
+    
+    -- 展开宏
+    local success, result = pcall(parse_template, macro_def.body, macro_env)
+    if success then
+        return result, nil
+    else
+        return nil, "宏展开错误: " .. result
+    end
+end
+
+--- 清空所有宏定义（用于测试或重置）
+function M.clear_macros()
+    macro_definitions = {}
+end
+
+--- 获取已定义的宏列表
+function M.get_macro_names()
+    local names = {}
+    for name in pairs(macro_definitions) do
+        table.insert(names, name)
+    end
+    return names
 end
 
 --============================================================================
