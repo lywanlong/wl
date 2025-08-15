@@ -916,6 +916,29 @@ M.add_filter('format_number', function(str)
     return formatted
 end)
 
+--============================================================================
+-- 文本后缀前缀过滤器
+--============================================================================
+
+-- 添加后缀
+M.add_filter('suffix', function(str, suffix_text)
+    if not suffix_text then return tostring(str or "") end
+    return tostring(str or "") .. tostring(suffix_text)
+end)
+
+-- 添加前缀
+M.add_filter('prefix', function(str, prefix_text)
+    if not prefix_text then return tostring(str or "") end
+    return tostring(prefix_text) .. tostring(str or "")
+end)
+
+-- 包装文本（同时添加前缀和后缀）
+M.add_filter('wrap', function(str, prefix_text, suffix_text)
+    local prefix = prefix_text or ""
+    local suffix = suffix_text or ""
+    return tostring(prefix) .. tostring(str or "") .. tostring(suffix)
+end)
+
 --- 获取过滤器的排序顺序
 --- @param name string
 --- @return integer

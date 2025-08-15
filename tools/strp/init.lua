@@ -1,1 +1,1 @@
-require 'wl.tools.strp.strp'
+return require 'wl.tools.strp.strp'
