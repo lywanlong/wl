@@ -18,12 +18,18 @@
 -- • 高性能优化和内存管理
 --============================================================================
 
+---@class StrpRenderOptions
+---@field cache? boolean 是否启用缓存，默认为 true
+---@field debug? boolean 是否启用调试模式，默认为 false
+
 ---@class StrpModule STRP 模板引擎主模块
----@field render fun(template: string, env: table, options?: table): string 渲染模板
----@field render_cached fun(template: string, env: table, options?: table): string 带缓存的渲染
+---@field render fun(template: string, env: table, options?: StrpRenderOptions): string 渲染模板
+---@field compile fun(template: string, options?: table): function?, string? 编译模板
 ---@field clear_cache fun(): nil 清空缓存
 ---@field get_cache_stats fun(): table 获取缓存统计
 ---@field get_version fun(): string 获取版本信息
+---@field warm_cache fun(templates: table, options?: table): nil 预热缓存
+---@field health_check fun(): table 健康检查
 local M = {}
 
 ---@type StrpModule
@@ -235,13 +241,13 @@ function M.compile(template, options)
 end
 
 --============================================================================
--- 主要API函数
+-- 主要API函数（统一的渲染接口）
 --============================================================================
 
---- 渲染模板（主要API）
+--- 渲染模板（统一API，支持缓存控制）
 ---@param template string 模板字符串
 ---@param env table 环境变量表
----@param options? table 渲染选项
+---@param options? StrpRenderOptions 渲染选项
 ---@return string result 渲染结果
 function M.render(template, env, options)
     if type(template) ~= "string" then
@@ -251,15 +257,52 @@ function M.render(template, env, options)
     env = env or {}
     options = constants.merge_options(options or {})
     
+    -- 默认启用缓存
+    local use_cache = options.cache ~= false
+    
     -- 性能监控
     local start_time = os.clock()
     
-    -- 编译并执行模板
-    local compiled_template, compile_error = M.compile(template, options)
-    if not compiled_template then
-        error(compile_error or "模板编译失败")
+    local compiled_template, compile_error
+    
+    if use_cache then
+        -- 缓存模式
+        -- 生成缓存键
+        local cache_key = generate_cache_key(template, options)
+        
+        -- 检查缓存
+        cache_stats.total_requests = cache_stats.total_requests + 1
+        
+        if template_cache[cache_key] then
+            -- 缓存命中
+            cache_stats.hits = cache_stats.hits + 1
+            cache_access_time[cache_key] = os.time()
+            compiled_template = template_cache[cache_key]
+        else
+            -- 缓存未命中，编译模板
+            cache_stats.misses = cache_stats.misses + 1
+            
+            compiled_template, compile_error = M.compile(template, options)
+            if not compiled_template then
+                error(compile_error or "模板编译失败")
+            end
+            
+            -- 存入缓存
+            template_cache[cache_key] = compiled_template
+            cache_access_time[cache_key] = os.time()
+            
+            -- 自动清理缓存
+            auto_cleanup()
+        end
+    else
+        -- 非缓存模式，直接编译
+        compiled_template, compile_error = M.compile(template, options)
+        if not compiled_template then
+            error(compile_error or "模板编译失败")
+        end
     end
     
+    -- 执行渲染
     local result = compiled_template(env)
     
     -- 性能统计
@@ -267,58 +310,11 @@ function M.render(template, env, options)
     local render_time = (end_time - start_time) * 1000
     
     if options.debug then
-        print(string.format("[STRP] 渲染耗时: %.2f ms", render_time))
+        local cache_status = use_cache and "cached" or "direct"
+        print(string.format("[STRP] 渲染耗时: %.2f ms (%s)", render_time, cache_status))
     end
     
     return result
-end
-
---- 带缓存的渲染（推荐用于生产环境）
----@param template string 模板字符串
----@param env table 环境变量表
----@param options? table 渲染选项
----@return string result 渲染结果
-function M.render_cached(template, env, options)
-    if type(template) ~= "string" then
-        error("模板必须是字符串类型")
-    end
-    
-    env = env or {}
-    options = constants.merge_options(options or {})
-    
-    -- 如果禁用缓存，直接渲染
-    if not options.cache then
-        return M.render(template, env, options)
-    end
-    
-    -- 生成缓存键
-    local cache_key = generate_cache_key(template, options)
-    
-    -- 检查缓存
-    cache_stats.total_requests = cache_stats.total_requests + 1
-    
-    if template_cache[cache_key] then
-        cache_stats.hits = cache_stats.hits + 1
-        cache_access_time[cache_key] = os.time()
-        return template_cache[cache_key](env)
-    end
-    
-    -- 缓存未命中，编译模板
-    cache_stats.misses = cache_stats.misses + 1
-    
-    local compiled_template, compile_error = M.compile(template, options)
-    if not compiled_template then
-        error(compile_error or "模板编译失败")
-    end
-    
-    -- 存入缓存
-    template_cache[cache_key] = compiled_template
-    cache_access_time[cache_key] = os.time()
-    
-    -- 自动清理缓存
-    auto_cleanup()
-    
-    return compiled_template(env)
 end
 
 --============================================================================
@@ -391,11 +387,13 @@ function M.warm_cache(templates, options)
     end
     
     options = constants.merge_options(options or {})
+    -- 确保预热时启用缓存
+    options.cache = true
     
     for _, template in ipairs(templates) do
         if type(template) == "string" then
-            -- 编译但不执行，只是为了缓存
-            M.compile(template, options)
+            -- 渲染一次以存入缓存（使用空环境）
+            M.render(template, {}, options)
         end
     end
 end
