@@ -725,11 +725,20 @@ end)
 
 -- 转大写
 M.add_filter('upper', function(str)
-    return string.upper(str)
+    if str == nil then
+        return ""
+    end
+    return string.upper(tostring(str))
 end)
 
 -- 格式化（如 format="玩家：%s"）
 M.add_filter('format', function(str, fmt)
+    if str == nil then
+        str = ""
+    end
+    if fmt == nil then
+        return tostring(str)
+    end
     return string.format(fmt, str)
 end)
 

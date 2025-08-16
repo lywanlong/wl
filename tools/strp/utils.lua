@@ -373,11 +373,25 @@ function M.compile_path_accessor(path)
                 return arr and arr[str_index] or nil
             end
         else
-            -- 变量索引
+            -- 变量索引 - 支持嵌套变量
             accessor = function(env)
                 local arr = env[simple_array_name]
+                if not arr then return nil end
+                
+                -- 如果索引本身是一个变量，直接从环境获取
                 local index = env[simple_array_index]
-                return arr and index and arr[index] or nil
+                if index ~= nil then
+                    return arr[index]
+                end
+                
+                -- 如果索引是数字字符串，转换为数字
+                local num_index = tonumber(simple_array_index)
+                if num_index then
+                    return arr[num_index]
+                end
+                
+                -- 否则作为字符串键处理
+                return arr[simple_array_index]
             end
         end
         path_cache[path] = accessor
@@ -410,8 +424,19 @@ function M.compile_path_accessor(path)
                     local str_index = array_index:sub(2, -2)
                     current = current[str_index]
                 else
+                    -- 变量索引 - 需要在运行时解析
                     local index = env[array_index]
-                    current = current[index]
+                    if index ~= nil then
+                        current = current[index]
+                    else
+                        -- 如果变量不存在，尝试数字转换
+                        local num_index = tonumber(array_index)
+                        if num_index then
+                            current = current[num_index]
+                        else
+                            current = current[array_index]
+                        end
+                    end
                 end
             else
                 -- 简单属性访问
