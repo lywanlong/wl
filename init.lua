@@ -18,3 +18,5 @@ Vector2 = require 'wl.type.Vector2'.create
 ----------------------------------------------
 
 wl.strp = require 'wl.tools.strp'
+
+wl.uif = require 'wl.tools.uif'.new
