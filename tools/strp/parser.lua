@@ -155,13 +155,13 @@ function M.find_block_end(template, start_pos, block_type)
     
     while pos <= template_len and depth > 0 do
         -- 查找下一个块标记
-        local next_start = template:find(escape_pattern(block_start), pos, true)
+        local next_start = template:find(block_start, pos, true)
         if not next_start then
             break
         end
         
         -- 查找对应的结束标记
-        local tag_end = template:find(escape_pattern(block_end), next_start, true)
+        local tag_end = template:find(block_end, next_start, true)
         if not tag_end then
             break
         end

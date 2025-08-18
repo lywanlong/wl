@@ -94,7 +94,13 @@ function M.handle_for(template, env, tag_end, code)
     -- 解析 for k,v in table 语法
     local key_var, value_var, expr = code:match("([%w_]+)%s*,%s*([%w_]+)%s+in%s+(.+)")
     if key_var and value_var then
-        local list = utils.eval(expr, env)
+        -- 先尝试直接从env获取变量
+        local list = env[expr]
+        -- 如果直接获取失败，再尝试eval
+        if not list then
+            list = utils.eval(expr, env)
+        end
+        
         if type(list) == "table" then
             for k, v in pairs(list) do
                 local new_env = setmetatable({[key_var] = k, [value_var] = v}, {__index = env})
@@ -107,7 +113,13 @@ function M.handle_for(template, env, tag_end, code)
     -- 解析 for var in table 语法
     local var, expr = code:match("([%w_]+)%s+in%s+(.+)")
     if var and expr then
-        local list = utils.eval(expr, env)
+        -- 先尝试直接从env获取变量
+        local list = env[expr]
+        -- 如果直接获取失败，再尝试eval
+        if not list then
+            list = utils.eval(expr, env)
+        end
+        
         if type(list) == "table" then
             for _, v in ipairs(list) do
                 local new_env = setmetatable({[var] = v}, {__index = env})
@@ -628,9 +640,13 @@ function M.handle_switch(template, env, tag_end, code)
     local block = template:sub(tag_end + 1, end_s - 1)
     
     -- 提前计算switch值，避免重复计算
-    local switch_value, eval_error = utils.eval(code, env)
-    if eval_error then
-        utils.error_with_context("switch 表达式计算错误: " .. eval_error, template, tag_end)
+    local switch_value = env[code]
+    if not switch_value then
+        local eval_result, eval_error = utils.eval(code, env)
+        if eval_error then
+            utils.error_with_context("switch 表达式计算错误: " .. eval_error, template, tag_end)
+        end
+        switch_value = eval_result
     end
     
     -- 解析所有分支

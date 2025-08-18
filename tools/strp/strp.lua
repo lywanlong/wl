@@ -31,6 +31,7 @@ local handlers = require 'wl.tools.strp.handlers'
 ---@field debug? boolean 是否启用调试模式，默认为 false
 ---@field recursive? boolean 是否启用递归渲染，默认为 false
 ---@field max_recursive_depth? integer 最大递归深度，默认为 10
+---@field error_handling? string 错误处理策略，默认为 "strict"
 
 -- 声明 STRP 类
 ---@class Strp
@@ -87,7 +88,7 @@ end
 
 --- 生成缓存键
 ---@param template string 模板字符串
----@param options? table 选项参数
+---@param options? StrpRenderOptions 选项参数
 ---@return string cache_key 缓存键
 function M:generate_cache_key(template, options)
     if not options or next(options) == nil then
@@ -161,7 +162,7 @@ end
 --============================================================================
 
 --- 创建错误处理器
----@param options table 选项配置
+---@param options StrpRenderOptions 选项配置
 ---@return function error_handler 错误处理函数
 function M:create_error_handler(options)
     local strategy = options.error_handling or "strict"
@@ -198,7 +199,7 @@ end
 
 --- 编译模板为可执行函数
 ---@param template string 模板字符串
----@param options? table 编译选项
+---@param options? StrpRenderOptions 编译选项
 ---@return function|nil compiled_template 编译后的模板函数
 ---@return string|nil error_msg 错误信息
 function M:compile(template, options)
@@ -227,8 +228,8 @@ function M:compile(template, options)
             -- 开始处理模板
             local processed = template
             
-            -- 处理变量替换 (核心功能)
-            processed = parser.replace_variables(processed, env)
+            -- 处理模板 (包括控制结构和变量替换)
+            processed = self:process_template(processed, env)
             
             -- 检查输出大小
             if #processed > constants.PERFORMANCE.MAX_OUTPUT_SIZE then
@@ -251,6 +252,119 @@ function M:compile(template, options)
     end
     
     return compiled_template, nil
+end
+
+--============================================================================
+-- 模板处理方法
+--============================================================================
+
+--- 处理完整模板（包括控制结构和变量替换）
+---@param template string 模板字符串
+---@param env table 环境变量
+---@return string result 处理结果
+function M:process_template(template, env)
+    if type(template) ~= "string" then
+        return tostring(template or "")
+    end
+    
+    env = env or {}
+    local result = ""
+    local pos = 1
+    local template_len = #template
+    
+    -- 设置handlers的parse_template引用
+    handlers.set_parse_template(function(tmpl, e) return self:process_template(tmpl, e) end)
+    
+    while pos <= template_len do
+        -- 查找下一个控制结构开始标记
+        local block_start = template:find(constants.SYNTAX.BLOCK_START, pos, true)
+        
+        if not block_start then
+            -- 没有更多控制结构，处理剩余部分的变量替换
+            local remaining = template:sub(pos)
+            result = result .. parser.replace_variables(remaining, env)
+            break
+        end
+        
+        -- 添加控制结构前的内容（处理变量替换）
+        if block_start > pos then
+            local before_block = template:sub(pos, block_start - 1)
+            result = result .. parser.replace_variables(before_block, env)
+        end
+        
+        -- 查找控制结构结束标记
+        local tag_start = block_start + #constants.SYNTAX.BLOCK_START
+        local tag_end_pos = template:find(constants.SYNTAX.BLOCK_END, tag_start, true)
+        
+        if not tag_end_pos then
+            -- 未找到结束标记，当作普通文本处理
+            local remaining = template:sub(pos)
+            result = result .. parser.replace_variables(remaining, env)
+            break
+        end
+        
+        -- 提取控制结构标签内容
+        local tag_content = template:sub(tag_start, tag_end_pos - 1):match("^%s*(.-)%s*$")
+        local keyword, code = tag_content:match("^(%w+)%s*(.*)")
+        
+        if keyword and constants.BLOCK_KEYWORDS[keyword] then
+            -- 处理控制结构
+            local handler_result, next_pos = self:handle_control_structure(template, env, keyword, code, tag_end_pos + #constants.SYNTAX.BLOCK_END - 1)
+            result = result .. handler_result
+            pos = next_pos
+        else
+            -- 不是已知的控制结构，当作普通文本处理
+            result = result .. parser.replace_variables(template:sub(pos, tag_end_pos + #constants.SYNTAX.BLOCK_END - 1), env)
+            pos = tag_end_pos + #constants.SYNTAX.BLOCK_END
+        end
+    end
+    
+    -- 清理多余的空白符
+    result = self:clean_whitespace(result)
+    
+    return result
+end
+
+--- 清理模板输出中的多余空白符
+---@param text string 要清理的文本
+---@return string cleaned 清理后的文本
+function M:clean_whitespace(text)
+    -- 只移除连续的3个或更多换行符，保留必要的换行
+    text = text:gsub("\n\n\n+", "\n\n")
+    
+    -- 移除文本开头和结尾的空白符
+    text = text:match("^%s*(.-)%s*$") or text
+    
+    return text
+end
+
+--- 处理控制结构
+---@param template string 模板字符串
+---@param env table 环境变量
+---@param keyword string 控制结构关键字
+---@param code string 控制结构代码
+---@param tag_end integer 标签结束位置
+---@return string result 处理结果
+---@return integer next_pos 下一个处理位置
+function M:handle_control_structure(template, env, keyword, code, tag_end)
+    if keyword == "for" then
+        return handlers.handle_for(template, env, tag_end, code)
+    elseif keyword == "if" then
+        return handlers.handle_if(template, env, tag_end, code)
+    elseif keyword == "while" then
+        return handlers.handle_while(template, env, tag_end, code)
+    elseif keyword == "with" then
+        return handlers.handle_with(template, env, tag_end, code)
+    elseif keyword == "switch" then
+        return handlers.handle_switch(template, env, tag_end, code)
+    elseif keyword == "try" then
+        return handlers.handle_try(template, env, tag_end, code)
+    elseif keyword == "macro" then
+        return handlers.handle_macro(template, env, tag_end, code)
+    else
+        -- 未知的控制结构，跳过
+        return "", tag_end + 1
+    end
 end
 
 --============================================================================
@@ -318,9 +432,10 @@ function M:render(template, env, options)
     
     -- 执行渲染
     local result = compiled_template(env)
-    
+    -- 默认递归渲染
+    local use_recursive = options.recursive ~= false
     -- 递归渲染
-    if options.recursive then
+    if use_recursive then
         local max_depth = options.max_recursive_depth or 10
         local depth = options._current_depth or 0
         
@@ -352,6 +467,24 @@ function M:render(template, env, options)
     end
     
     return result
+end
+
+--- 通过模板名称渲染模板
+---@param template_name string 模板名称
+---@param env table 环境变量表
+---@param options? StrpRenderOptions 渲染选项
+---@return string result 渲染结果
+function M:render_by_name(template_name, env, options)
+    if type(template_name) ~= "string" then
+        return self.error_handler("模板名称必须是字符串类型")
+    end
+    
+    local template = self.template_registry[template_name]
+    if not template then
+        return self.error_handler("未找到模板: " .. tostring(template_name))
+    end
+    
+    return self:render(template, env, options)
 end
 
 --============================================================================
@@ -408,24 +541,6 @@ function M:unregister_template(name)
         return true
     end
     return false
-end
-
---- 通过模板名称渲染模板
----@param template_name string 模板名称
----@param env table 环境变量表
----@param options? StrpRenderOptions 渲染选项
----@return string result 渲染结果
-function M:render_by_name(template_name, env, options)
-    if type(template_name) ~= "string" then
-        return self.error_handler("模板名称必须是字符串类型")
-    end
-    
-    local template = self.template_registry[template_name]
-    if not template then
-        return self.error_handler("未找到模板: " .. tostring(template_name))
-    end
-    
-    return self:render(template, env, options)
 end
 
 --============================================================================
@@ -508,7 +623,7 @@ end
 
 --- 预热缓存（可选的性能优化）
 ---@param templates table 模板列表
----@param options? table 选项配置
+---@param options? StrpRenderOptions 选项配置
 ---@return nil
 function M:warm_cache(templates, options)
     if type(templates) ~= "table" then

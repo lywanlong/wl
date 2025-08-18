@@ -742,6 +742,24 @@ M.add_filter('format', function(str, fmt)
     return string.format(fmt, str)
 end)
 
+-- 除法运算
+M.add_filter('divide', function(str, divisor)
+    local num = tonumber(str)
+    local div = tonumber(divisor)
+    if num and div and div ~= 0 then
+        return tostring(num / div)
+    end
+    return tostring(str)
+end)
+
+-- 替换函数
+M.add_filter('substitute', function(str, replacement)
+    if replacement then
+        return tostring(replacement)
+    end
+    return tostring(str)
+end)
+
 -- 默认值
 M.add_filter('default', function(str, def)
     if str == nil or str == "" then
