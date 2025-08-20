@@ -725,12 +725,39 @@ end)
 
 -- 转大写
 M.add_filter('upper', function(str)
-    return string.upper(str)
+    if str == nil then
+        return ""
+    end
+    return string.upper(tostring(str))
 end)
 
 -- 格式化（如 format="玩家：%s"）
 M.add_filter('format', function(str, fmt)
+    if str == nil then
+        str = ""
+    end
+    if fmt == nil then
+        return tostring(str)
+    end
     return string.format(fmt, str)
+end)
+
+-- 除法运算
+M.add_filter('divide', function(str, divisor)
+    local num = tonumber(str)
+    local div = tonumber(divisor)
+    if num and div and div ~= 0 then
+        return tostring(num / div)
+    end
+    return tostring(str)
+end)
+
+-- 替换函数
+M.add_filter('substitute', function(str, replacement)
+    if replacement then
+        return tostring(replacement)
+    end
+    return tostring(str)
 end)
 
 -- 默认值

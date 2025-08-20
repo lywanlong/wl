@@ -342,9 +342,26 @@ function M.compile_path_accessor(path)
     
     -- 简单路径直接访问
     if not path:find("[.%[%]]") then
-        local accessor = function(env) return env[path] end
-        path_cache[path] = accessor
-        return accessor
+        -- 检查是否是长度操作符
+        if path:sub(1, 1) == "#" then
+            local var_name = path:sub(2)
+            local accessor = function(env) 
+                local value = env[var_name]
+                if type(value) == "table" then
+                    return #value
+                elseif type(value) == "string" then
+                    return #value
+                else
+                    return 0
+                end
+            end
+            path_cache[path] = accessor
+            return accessor
+        else
+            local accessor = function(env) return env[path] end
+            path_cache[path] = accessor
+            return accessor
+        end
     end
     
     -- 检查是否是简单的数组访问格式 name[index]
@@ -373,11 +390,34 @@ function M.compile_path_accessor(path)
                 return arr and arr[str_index] or nil
             end
         else
-            -- 变量索引
+            -- 变量索引 - 支持嵌套变量
             accessor = function(env)
                 local arr = env[simple_array_name]
-                local index = env[simple_array_index]
-                return arr and index and arr[index] or nil
+                if not arr then return nil end
+                
+                local index_value = simple_array_index
+                
+                -- 检查是否包含嵌套模板变量
+                if index_value:find("${", 1, true) then
+                    -- 需要先解析嵌套模板，使用递归处理
+                    local parser = require 'wl.tools.strp.parser'
+                    index_value = parser.replace_variables(index_value, env, 5) -- 限制递归深度
+                end
+                
+                -- 如果索引本身是一个变量，直接从环境获取
+                local index = env[index_value]
+                if index ~= nil then
+                    return arr[index]
+                end
+                
+                -- 如果索引是数字字符串，转换为数字
+                local num_index = tonumber(index_value)
+                if num_index then
+                    return arr[num_index]
+                end
+                
+                -- 否则作为字符串键处理
+                return arr[index_value]
             end
         end
         path_cache[path] = accessor
@@ -410,12 +450,45 @@ function M.compile_path_accessor(path)
                     local str_index = array_index:sub(2, -2)
                     current = current[str_index]
                 else
-                    local index = env[array_index]
-                    current = current[index]
+                    -- 变量索引 - 需要在运行时解析
+                    local index_value = array_index
+                    
+                    -- 检查是否包含嵌套模板变量
+                    if index_value:find("${", 1, true) then
+                        -- 需要先解析嵌套模板，使用递归处理
+                        local parser = require 'wl.tools.strp.parser'
+                        index_value = parser.replace_variables(index_value, env, 5) -- 限制递归深度
+                    end
+                    
+                    local index = env[index_value]
+                    if index ~= nil then
+                        current = current[index]
+                    else
+                        -- 如果变量不存在，尝试数字转换
+                        local num_index = tonumber(index_value)
+                        if num_index then
+                            current = current[num_index]
+                        else
+                            current = current[index_value]
+                        end
+                    end
                 end
             else
-                -- 简单属性访问
-                current = current[part]
+                -- 检查是否是长度操作符
+                if part:sub(1, 1) == "#" then
+                    local var_name = part:sub(2)
+                    local value = current[var_name]
+                    if type(value) == "table" then
+                        current = #value
+                    elseif type(value) == "string" then
+                        current = #value
+                    else
+                        current = 0
+                    end
+                else
+                    -- 简单属性访问
+                    current = current[part]
+                end
             end
         end
         return current

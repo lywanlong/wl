@@ -242,7 +242,7 @@ M.DEFAULT_OPTIONS = {
     strict = false,
     
     -- 是否自动转义
-    autoescape = true,
+    autoescape = false,
     
     -- 默认编码
     encoding = "utf-8",

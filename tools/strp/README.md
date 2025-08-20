@@ -1,613 +1,718 @@
-# STRP - 高性能模板引擎 v2.1
+# STRP 模板引擎
 
-STRP (String Template Replacement Parser) 是一个功能完整的 Lua 模板引擎，采用 Jinja 风格语法，经过深度优化，具备生产级性能和安全性。
+一个功能强大、高性能的 Lua 模板引擎，专为游戏开发和动态内容生成而设计。
 
-## ✨ 核心特性
+## 🌟 特性亮点
 
-- 🎯 **功能完整**: 支持变量、嵌套模板、过滤器链等所有主流模板特性
-- 🚀 **高性能**: 智能缓存系统、预编译优化、LRU淘汰策略
-- 🔒 **安全可靠**: XSS防护、表达式沙箱、类型检查、错误隔离
-- 🌍 **中文友好**: 完整的 UTF-8 支持，中文变量名和内容无障碍
-- 🔧 **易扩展**: 模块化架构，50+ 内置过滤器，插件式过滤器系统
-- 📚 **文档完善**: 详细的代码注释、类型标注、使用示例
-- ✨ **嵌套模板**: 支持 `${variable|filter:${dynamic_param}}` 动态参数语法
+- **🔗 深度嵌套支持** - 支持任意深度的变量嵌套和模板组合
+- **🎯 智能变量替换** - 支持复杂的对象路径访问和数组索引
+- **⚡ 高性能缓存** - 内置 LRU 缓存系统，优化重复渲染性能
+- **🛡️ 安全可靠** - 完善的错误处理和递归深度保护
+- **🎨 丰富过滤器** - 内置30+种常用过滤器，支持链式调用
+- **📦 模块化设计** - 基于 Y3 Class 系统的面向对象架构
 
-## 📋 目录
+## 📦 快速开始
 
-- [快速开始](#快速开始)
-- [基本语法](#基本语法)
-- [嵌套模板](#嵌套模板)
-- [变量系统](#变量系统)
-- [过滤器系统](#过滤器系统)
-- [性能优化](#性能优化)
-- [安全机制](#安全机制)
-- [API参考](#api参考)
-- [架构设计](#架构设计)
-- [最佳实践](#最佳实践)
-
-## 🚀 快速开始
-
-### 文件结构
-
-```
-wl/tools/strp/
-├── strp.lua          # 主API接口，缓存管理
-├── constants.lua     # 配置常量，性能参数
-├── utils.lua         # 工具函数，安全操作
-├── parser.lua        # 语法解析，变量处理
-├── handlers.lua         # 控制结构，宏系统
-├── filters.lua          # 过滤器库，50+过滤器
-└── README.md           # 完整文档
-```
-
-### 基本使用
+### 安装与引入
 
 ```lua
-local strp = require('wl.tools.strp.strp')
+local strp = require 'wl.tools.strp'
 
+-- 创建 STRP 实例
+local engine = New 'Strp' ()
+```
+
+### 基础用法
+
+```lua
 -- 简单变量替换
-local result = strp.render("Hello, ${name}!", {name = "张三"})
-print(result)  -- 输出: Hello, 张三!
+local result = engine:render("Hello ${name}!", {name = "张三"})
+-- 输出: Hello 张三!
 
--- 使用过滤器
-local result = strp.render("${message|upper}", {message = "hello world"})
-print(result)  -- 输出: HELLO WORLD
-
--- 嵌套模板（v2.1新特性）
-local data = {
-    user_name = nil,
-    default_name = "匿名用户",
-    star_level = 2,
-    star_level_attrs = {
-        [1] = {damage = 100, color = "#CCCCCC"},
-        [2] = {damage = 200, color = "#FF8800"}
+-- 对象属性访问
+local env = {
+    user = {
+        name = "李四",
+        level = 25
     }
 }
-
-local template = "${user_name|default:${default_name}}"
-local result = strp.render(template, data)
-print(result)  -- 输出: 匿名用户
-
--- 复杂嵌套模板
-local skill_template = "造成 ${star_level_attrs[star_level].damage|color:${star_level_attrs[star_level].color}} 点伤害"
-local result = strp.render(skill_template, data)
-print(result)  -- 输出: 造成 #FF8800200#E 点伤害
+local result = engine:render("玩家: ${user.name} (Lv.${user.level})", env)
+-- 输出: 玩家: 李四 (Lv.25)
 ```
 
-## 🎯 嵌套模板
+## 🔧 核心功能
 
-### 基本语法
+### 1. 变量替换
 
-嵌套模板允许在过滤器参数中使用动态变量：
-
+#### 基础语法
 ```lua
-${variable|filter:${dynamic_parameter}}
+-- 字符串变量
+"${name}"                    -- 输出变量值
+"${user.name}"              -- 对象属性访问
+"${items[0]}"               -- 数组索引访问
+"${#items}"                 -- 数组长度
 ```
 
-### 支持的嵌套类型
-
-#### 1. 默认值嵌套
+#### 嵌套变量
 ```lua
--- 基础用法
-${user_name|default:${fallback_name}}
+-- 动态索引访问
+"${users[${current_index}].name}"
 
--- 数组索引嵌套
-${items[current_index]|default:${items[fallback_index]}}
+-- 动态键访问  
+"${config[${user.theme}].color}"
 
--- 对象属性嵌套
-${user.avatar|default:${config.default_avatar}}
+-- 多层嵌套
+"${users[${current_index}].permissions[${role}][0]}"
 ```
 
-#### 2. 过滤器链嵌套
+### 2. 过滤器系统
+
+#### 基础过滤器
 ```lua
--- 动态颜色
-${damage|color:${rarity_colors[item_rarity]}}
+-- 颜色渲染
+"${name|color:red}"          -- 红色文本
+"${level|color:${level_color}}" -- 动态颜色
 
--- 动态格式化
-${value|format:${templates[template_type]}}
+-- 字符串处理
+"${text|upper}"              -- 转大写
+"${text|lower}"              -- 转小写
+"${text|trim}"               -- 去除空白
+"${text|capitalize}"         -- 首字母大写
 
--- 多级嵌套
-${text|translate:${user.language}|color:${themes[user.theme].text_color}}
+-- 数值处理
+"${price|format:'¥%.2f'}"    -- 格式化金额
+"${exp|divide:100}"          -- 除法运算
+"${count|default:0}"         -- 默认值
 ```
 
-#### 3. 复杂表达式嵌套
+#### 过滤器链
 ```lua
--- 游戏技能描述
+-- 多个过滤器组合
+"${level|format:'Lv.%d'|color:gold|upper}"
+
+-- 嵌套参数过滤器
+"${user.name|color:${colors[${user.rank}]}}"
+```
+
+### 3. 模板注册系统
+
+```lua
+-- 注册命名模板
+engine:register_template("user_card", "【${type}】${name} Lv.${level}")
+engine:register_template("item_display", "${name}(${quality})")
+
+-- 使用注册的模板
+local result = engine:render_by_name("user_card", {
+    type = "战士",
+    name = "勇者",
+    level = 20
+})
+-- 输出: 【战士】勇者 Lv.20
+```
+
+### 4. 缓存管理
+
+```lua
+-- 获取缓存统计
+local stats = engine:get_cache_stats()
+print("缓存命中率:", stats.template_cache.hit_rate)
+
+-- 清理缓存
+engine:clear_cache()
+
+-- 预热缓存
+engine:warm_cache({
+    "Hello ${name}!",
+    "Level: ${level}",
+    "Score: ${score|format:'%d分'}"
+})
+```
+
+## 🎨 内置过滤器详解
+
+### 字符串处理类
+| 过滤器 | 描述 | 示例 |
+|--------|------|------|
+| `upper` | 转大写 | `${text\|upper}` |
+| `lower` | 转小写 | `${text\|lower}` |
+| `capitalize` | 首字母大写 | `${text\|capitalize}` |
+| `trim` | 去除首尾空白 | `${text\|trim}` |
+| `length` | 获取长度 | `${text\|length}` |
+
+### 数值处理类
+| 过滤器 | 描述 | 示例 |
+|--------|------|------|
+| `format` | 格式化 | `${num\|format:'%.2f'}` |
+| `divide` | 除法运算 | `${exp\|divide:100}` |
+| `tonumber` | 转数字 | `${str\|tonumber}` |
+| `default` | 默认值 | `${val\|default:'无'}` |
+
+### 显示效果类
+| 过滤器 | 描述 | 示例 |
+|--------|------|------|
+| `color` | 颜色渲染 | `${text\|color:red}` |
+| `substitute` | 替换内容 | `${old\|substitute:${new}}` |
+
+### 日期时间类
+| 过滤器 | 描述 | 示例 |
+|--------|------|------|
+| `date` | 日期格式化 | `${timestamp\|date:'Y-m-d'}` |
+| `time_ago` | 相对时间 | `${timestamp\|time_ago}` |
+| `duration` | 时长格式化 | `${seconds\|duration}` |
+
+## 🎯 逻辑控制语法
+
+STRP 模板引擎支持强大的逻辑控制结构，让你能够创建动态和条件化的模板内容。
+
+### 1. 条件判断 (if/endif)
+
+#### 基础条件判断
+```lua
+{% if user.level >= 10 %}
+恭喜！您已达到高级用户级别！
+{% endif %}
+
+-- 带变量的条件
+{% if user.vip %}
+VIP用户专享特权
+{% endif %}
+```
+
+#### 复杂条件表达式
+```lua
+-- 数值比较
+{% if player.hp > player.max_hp * 0.5 %}
+生命值充足
+{% endif %}
+
+-- 字符串比较
+{% if user.rank == "admin" %}
+管理员功能
+{% endif %}
+
+-- 组合条件
+{% if user.level >= 20 and user.vip %}
+高级VIP用户福利
+{% endif %}
+```
+
+### 2. 循环结构
+
+#### for-in 数组循环
+```lua
+-- 遍历数组
+{% for item in inventory %}
+物品: ${item.name} x${item.count}
+{% endfor %}
+
+-- 遍历玩家列表
+{% for player in players %}
+${player.name} - Lv.${player.level}
+{% endfor %}
+```
+
+#### for-in 键值对循环
+```lua
+-- 遍历属性表
+{% for key, value in player.stats %}
+${key}: ${value}
+{% endfor %}
+
+-- 遍历配置项
+{% for setting, val in config %}
+${setting} = ${val}
+{% endfor %}
+```
+
+#### 循环中的特殊应用
+```lua
+-- 生成技能列表
+{% for skill in player.skills %}
+【${skill.type}】${skill.name}
+伤害: ${skill.damage} | 冷却: ${skill.cooldown}s
+{% endfor %}
+
+-- 生成排行榜
+{% for rank, player in leaderboard %}
+第${rank}名: ${player.name} (${player.score}分)
+{% endfor %}
+```
+
+### 3. while 循环
+
+#### 基础 while 循环
+```lua
+-- 计数循环
+{% while count < 5 %}
+第${count}次循环
+{% endwhile %}
+
+-- 条件循环
+{% while player.exp >= next_level_exp %}
+玩家升级了！当前等级: ${player.level}
+{% endwhile %}
+```
+
+### 4. 作用域控制 (with)
+
+#### 简化变量访问
+```lua
+-- 使用 with 简化深层对象访问
+{% with player.inventory.weapon as weapon %}
+武器名称: ${weapon.name}
+武器类型: ${weapon.type}
+攻击力: ${weapon.damage}
+{% endwith %}
+
+-- 另一种语法形式
+{% with weapon = player.inventory.weapon %}
+武器描述: ${weapon.description}
+耐久度: ${weapon.durability}/${weapon.max_durability}
+{% endwith %}
+```
+
+#### 临时变量计算
+```lua
+{% with total_damage = player.base_damage + weapon.damage %}
+总攻击力: ${total_damage}
+暴击伤害: ${total_damage * 1.5}
+{% endwith %}
+```
+
+### 5. 选择结构 (switch/case)
+
+#### 基础选择结构
+```lua
+{% switch player.class %}
+{% case "warrior" %}
+⚔️ 战士 - 近战物理职业
+技能: 冲锋、盾击、战吼
+{% case "mage" %}
+🔮 法师 - 远程魔法职业  
+技能: 火球术、冰霜箭、传送
+{% case "archer" %}
+🏹 弓箭手 - 远程物理职业
+技能: 多重射击、陷阱、鹰眼
+{% default %}
+🤷 未知职业
+{% endswitch %}
+```
+
+#### 动态选择
+```lua
+{% switch item.rarity %}
+{% case "common" %}
+品质: ${item.name|color:white}
+{% case "rare" %}
+品质: ${item.name|color:blue}
+{% case "epic" %}
+品质: ${item.name|color:purple}
+{% case "legendary" %}
+品质: ${item.name|color:orange}
+{% default %}
+品质: ${item.name}
+{% endswitch %}
+```
+
+### 6. 错误处理 (try/catch)
+
+#### 基础错误处理
+```lua
+{% try %}
+玩家数据: ${player.stats.unknown_stat}
+{% catch error %}
+数据加载失败: ${error}
+{% endtry %}
+```
+
+#### 安全的属性访问
+```lua
+{% try %}
+装备信息: ${player.equipment.armor.defense}
+{% catch %}
+未装备护甲
+{% endtry %}
+```
+
+### 7. 宏定义 (macro)
+
+#### 无参数宏
+```lua
+{% macro signature %}
+————————————————
+游戏版本: v1.0.0
+开发团队: XYZ Studio
+{% endmacro %}
+
+-- 使用宏
+${signature()}
+```
+
+#### 带参数宏
+```lua
+{% macro damage_display(damage, type, critical=false) %}
+{% if critical %}
+💥 暴击！造成 ${damage|color:red} 点${type}伤害
+{% else %}
+⚔️ 造成 ${damage} 点${type}伤害
+{% endif %}
+{% endmacro %}
+
+-- 使用带参数的宏
+${damage_display(150, "物理", true)}
+${damage_display(80, "魔法")}
+```
+
+#### 复杂宏示例
+```lua
+{% macro player_card(player, show_stats=true) %}
+【${player.class}】${player.name} 
+等级: ${player.level} | 经验: ${player.exp}/${player.next_level_exp}
+{% if show_stats %}
+属性: 攻击${player.attack} 防御${player.defense} 敏捷${player.agility}
+{% endif %}
+{% endmacro %}
+
+-- 使用复杂宏
+${player_card(current_player)}
+${player_card(enemy_player, false)}
+```
+
+### 8. 逻辑结构组合应用
+
+#### 游戏战斗日志模板
+```lua
+{% for action in battle_log %}
+{% switch action.type %}
+{% case "attack" %}
+${action.attacker.name} 攻击 ${action.target.name}
+{% if action.critical %}
+💥 暴击！造成 ${action.damage|color:red} 伤害
+{% else %}
+⚔️ 造成 ${action.damage} 伤害  
+{% endif %}
+
+{% case "heal" %}
+${action.caster.name} 治疗 ${action.target.name}
+💚 恢复 ${action.amount|color:green} 生命值
+
+{% case "skill" %}
+${action.caster.name} 使用技能【${action.skill.name}】
+{% if action.targets %}
+{% for target in action.targets %}
+对 ${target.name} 造成 ${target.damage} 伤害
+{% endfor %}
+{% endif %}
+
+{% endswitch %}
+{% endfor %}
+```
+
+#### 物品详情模板
+```lua
+{% with item as current_item %}
+📦 ${current_item.name}
+
+{% switch current_item.type %}
+{% case "weapon" %}
+⚔️ 武器类型: ${current_item.weapon_type}
+💪 攻击力: ${current_item.damage}
+{% if current_item.enchants %}
+🔮 附魔效果:
+{% for enchant in current_item.enchants %}
+  • ${enchant.name}: ${enchant.description}
+{% endfor %}
+{% endif %}
+
+{% case "armor" %}
+🛡️ 护甲类型: ${current_item.armor_type}  
+🛡️ 防御力: ${current_item.defense}
+
+{% case "consumable" %}
+🧪 消耗品
+📝 效果: ${current_item.effect}
+{% if current_item.duration %}
+⏱️ 持续时间: ${current_item.duration}秒
+{% endif %}
+
+{% endswitch %}
+
+💰 价值: ${current_item.value} 金币
+{% if current_item.description %}
+📖 描述: ${current_item.description}
+{% endif %}
+{% endwith %}
+```
+
+### 9. 性能提示
+
+#### 循环优化
+```lua
+-- ✅ 推荐：预先计算条件
+{% with players_count = #players %}
+{% if players_count > 0 %}
+在线玩家 (${players_count}):
+{% for player in players %}
+${player.name}
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+-- ❌ 避免：在循环中重复计算
+{% for player in players %}
+{% if #players > 10 %}  <!-- 每次循环都计算 -->
+${player.name}
+{% endif %}
+{% endfor %}
+```
+
+#### 嵌套控制
+```lua
+-- 合理控制嵌套深度，避免过深的结构
+{% if user.is_admin %}
+  {% for section in admin_sections %}
+    {% switch section.type %}
+    {% case "users" %}
+      <!-- 用户管理内容 -->
+    {% case "settings" %}  
+      <!-- 设置管理内容 -->
+    {% endswitch %}
+  {% endfor %}
+{% endif %}
+```
+
+## 🔍 高级用法
+
+### 复杂嵌套场景
+
+```lua
+-- 游戏角色信息卡片
 local template = [[
-技能等级：${star_level} 星
-触发概率：${attrs[star_level].prob|default:${attrs[fallback_level].prob}}%
-造成伤害：${attrs[star_level].damage|color:${attrs[star_level].color}}点
+【${type}】${name} Lv.${level}
+装备: ${inventory.weapon.name|color:${quality_colors[${inventory.weapon.quality}]}}
+属性: 攻击力 ${stats.attack|format:'%d'} | 防御力 ${stats.defense|format:'%d'}
 ]]
 
-local data = {
-    star_level = 3,
-    fallback_level = 1,
-    attrs = {
-        [1] = {prob = 10, damage = 100, color = "#CCCCCC"},
-        [2] = {prob = 20, damage = 200, color = "#00FF00"},
-        [3] = {prob = 30, damage = 300, color = "#FF0000"}
-    }
-}
-
-local result = strp.render(template, data)
-```
-
-## 🔧 变量系统
-
-### 简单变量
-```lua
-local data = {name = "张三", age = 25}
-local template = "姓名：${name}，年龄：${age}"
-```
-
-### 嵌套对象
-```lua
-local data = {
-    user = {
-        profile = {
-            name = "张三",
-            email = "zhangsan@example.com"
+local env = {
+    type = "法师",
+    name = "艾莉丝",
+    level = 35,
+    inventory = {
+        weapon = {
+            name = "法杖",
+            quality = "epic"
         }
+    },
+    stats = {
+        attack = 245,
+        defense = 128
+    },
+    quality_colors = {
+        common = "#FFFFFF",
+        rare = "#0080FF", 
+        epic = "#8000FF"
     }
 }
-local template = "用户：${user.profile.name} (${user.profile.email})"
+
+local result = engine:render(template, env)
 ```
 
-### 数组访问
+### 动态内容生成
+
 ```lua
-local data = {
-    items = {"苹果", "香蕉", "橙子"},
-    index = 1
+-- 战斗结果模板
+local battle_template = [[
+🏆 战斗胜利!
+${winner.name} 击败了 ${loser.name}
+获得经验: ${rewards.exp|format:'%d'}
+获得金币: ${rewards.gold|format:'%d'}
+${#rewards.items > 0 and '掉落物品:' or ''}${rewards.items[0].name|default:''}
+]]
+
+-- 商店物品展示
+local shop_template = [[
+📦 ${item.name}
+💰 价格: ${item.price|format:'%d金币'}
+📊 评级: ${item.rating|color:${rating_colors[${item.rating}]}}
+📝 ${item.description|default:'暂无描述'}
+]]
+```
+
+## ⚙️ 配置选项
+
+```lua
+-- 创建带配置的实例
+local engine = New 'Strp' {
+    cache = true,                    -- 启用缓存
+    recursive = true,                -- 启用递归渲染
+    max_recursive_depth = 10,        -- 最大递归深度
+    debug = false,                   -- 调试模式
+    autoescape = false,              -- 自动HTML转义
+    error_handling = "strict"        -- 错误处理策略: "strict"|"ignore"|"replace"
 }
-local template = "第一个水果：${items[0]}，当前水果：${items[index]}"
 ```
 
-## 🎨 过滤器系统
+## 🚀 性能优化建议
 
-### 默认值过滤器
+### 1. 合理使用缓存
 ```lua
--- 通用默认值
-${value|default:"默认值"}
+-- 频繁使用的模板启用缓存
+local result = engine:render_cached(template, env)
 
--- 仅当nil时使用默认值
-${value|default_if_nil:"默认值"}
-
--- 仅当空字符串时使用默认值
-${value|default_if_empty:"默认值"}
-
--- 嵌套默认值
-${primary_value|default:${secondary_value}|default:"最终默认值"}
+-- 一次性使用的模板禁用缓存
+local result = engine:render_direct(template, env)
 ```
 
-### 字符串处理
+### 2. 预注册常用模板
 ```lua
--- 大小写转换
-${text|upper}              -- 转为大写
-${text|lower}              -- 转为小写
-${text|title}              -- 标题格式
-
--- 字符串操作
-${text|trim}               -- 去除首尾空格
-${text|length}             -- 获取长度
-${text|reverse}            -- 反转字符串
-${text|substring:0:10}     -- 截取子字符串
+-- 预注册减少重复编译
+engine:register_template("damage_text", "${damage|color:red}dmg")
+engine:register_template("heal_text", "+${heal|color:green}hp")
 ```
 
-### 数字处理
+### 3. 批量预热
 ```lua
--- 数学运算
-${number|add:10}           -- 加法
-${number|subtract:5}       -- 减法
-${number|multiply:2}       -- 乘法
-${number|divide:3}         -- 除法
-
--- 格式化
-${number|format:"%.2f"}    -- 格式化为2位小数
-${number|currency}         -- 货币格式
-${number|percentage}       -- 百分比格式
+-- 游戏启动时预热常用模板
+engine:warm_cache({
+    "Level ${level} ${class}",
+    "HP: ${hp}/${max_hp}",
+    "MP: ${mp}/${max_mp}"
+})
 ```
 
-### 集合处理
+## 🛡️ 错误处理
+
+### 错误处理策略
 ```lua
--- 数组操作
-${array|length}            -- 数组长度
-${array|join:","}          -- 连接数组
-${array|sort}              -- 排序
-${array|reverse}           -- 反转
-${array|first}             -- 第一个元素
-${array|last}              -- 最后一个元素
+-- 严格模式 - 遇到错误立即抛出异常
+local engine = New 'Strp' {error_handling = "strict"}
+
+-- 忽略模式 - 错误位置返回空字符串
+local engine = New 'Strp' {error_handling = "ignore"}
+
+-- 替换模式 - 显示错误信息
+local engine = New 'Strp' {error_handling = "replace"}
 ```
 
-### 日期时间
+### 常见错误及解决方案
+
+| 错误类型 | 原因 | 解决方案 |
+|----------|------|----------|
+| 变量不存在 | `${undefined_var}` | 使用 `default` 过滤器 |
+| 深度嵌套 | 递归层数过多 | 检查模板循环引用 |
+| 过滤器不存在 | 使用未定义过滤器 | 检查过滤器名称拼写 |
+| 数组越界 | 索引超出范围 | 添加边界检查 |
+
+## 📈 性能监控
+
 ```lua
--- 日期格式化
-${timestamp|date:"%Y-%m-%d"}          -- 格式化日期
-${timestamp|time:"%H:%M:%S"}          -- 格式化时间
-${timestamp|datetime:"%Y-%m-%d %H:%M"} -- 日期时间
-${timestamp|relative}                  -- 相对时间 (1小时前)
+-- 获取详细统计信息
+local stats = engine:get_cache_stats()
+print("模板缓存:")
+print("- 命中率:", stats.template_cache.hit_rate)
+print("- 缓存大小:", stats.template_cache.size)
+print("- 总请求:", stats.template_cache.total_requests)
+
+-- 健康检查
+local health = engine:health_check()
+if health.memory_warning then
+    print("⚠️ 内存使用过高:", health.memory_usage)
+end
 ```
 
-### 安全处理
-```lua
--- HTML转义
-${html_content|escape}     -- HTML实体编码
-${html_content|safe}       -- 标记为安全（跳过转义）
-
--- URL处理
-${url|urlencode}           -- URL编码
-${url|urldecode}           -- URL解码
-```
+## 🔧 扩展开发
 
 ### 自定义过滤器
 ```lua
--- 在 filters.lua 中添加自定义过滤器
-local function custom_filter(value, arg1, arg2)
-    -- 自定义逻辑
-    return processed_value
-end
+local filters = require 'wl.tools.strp.filters'
 
--- 注册过滤器
-filters.register("custom", custom_filter)
+-- 添加自定义过滤器
+filters.add_filter('currency', function(amount, currency_type)
+    local symbols = {
+        gold = "💰",
+        diamond = "💎",
+        coin = "🪙"
+    }
+    return (symbols[currency_type] or "") .. tostring(amount)
+end)
 
 -- 使用自定义过滤器
-${value|custom:arg1:arg2}
+local result = engine:render("余额: ${balance|currency:'gold'}", {balance = 1000})
+-- 输出: 余额: 💰1000
 ```
 
-## 🚀 性能优化
+## 📋 最佳实践
 
-### 缓存策略
-
-#### 模板缓存
+### 1. 模板组织
 ```lua
--- 启用缓存（默认）
-local result = strp.render_cached(template, data)
+-- 按功能分类注册模板
+engine:register_template("ui.player_name", "${name|color:${name_color}}")
+engine:register_template("ui.health_bar", "❤️ ${hp}/${max_hp}")
+engine:register_template("ui.mana_bar", "💙 ${mp}/${max_mp}")
 
--- 禁用缓存
-local result = strp.render(template, data, {cache = false})
-
--- 预热缓存
-strp.warm_cache({"template1", "template2", "template3"})
-
--- 清空缓存
-strp.clear_cache()
+-- 组合使用
+local ui_template = "${ui.player_name} ${ui.health_bar} ${ui.mana_bar}"
 ```
 
-#### 缓存统计
+### 2. 数据结构设计
 ```lua
-local stats = strp.get_cache_stats()
-print("缓存命中率:", stats.template_cache.hit_rate)
-print("缓存大小:", stats.template_cache.size)
-print("内存使用:", stats.memory_usage, "MB")
-```
-
-### 批处理优化
-```lua
--- 批量处理多个模板
-local templates = {"template1", "template2", "template3"}
-local data_list = {data1, data2, data3}
-
-local results = {}
-for i, template in ipairs(templates) do
-    results[i] = strp.render_cached(template, data_list[i])
-end
-```
-
-### 内存管理
-```lua
--- 检查内存使用
-local health = strp.health_check()
-if health.memory_warning then
-    print("内存使用过高:", health.memory_usage, "MB")
-    strp.clear_cache()  -- 清理缓存释放内存
-end
-```
-
-## 🔒 安全机制
-
-### XSS防护
-```lua
--- 自动转义HTML（默认启用）
-local result = strp.render("${user_input}", {user_input = "<script>alert('xss')</script>"})
--- 输出: &lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;
-
--- 禁用自动转义
-local result = strp.render(template, data, {autoescape = false})
-
--- 手动转义
-${user_input|escape}
-```
-
-### 表达式沙箱
-```lua
--- 安全的表达式求值
-${math.max(a, b)}          -- 允许：数学函数
-${string.upper(text)}      -- 允许：字符串函数
-${os.execute("rm -rf /")}  -- 禁止：危险系统调用
-
--- 自定义安全策略
-local options = {
-    security = {
-        enable_sandbox = true,
-        allowed_functions = {"math.abs", "string.len"},
-        forbidden_functions = {"os.execute", "io.open"}
+-- 推荐的环境变量结构
+local env = {
+    player = {
+        name = "勇者",
+        level = 20,
+        stats = {hp = 100, max_hp = 100, mp = 50, max_mp = 50}
+    },
+    ui = {
+        colors = {primary = "#FF6B6B", secondary = "#4ECDC4"},
+        themes = {current = "dark"}
+    },
+    game = {
+        time = os.time(),
+        weather = "sunny"
     }
 }
 ```
 
-### 输入验证
+### 3. 性能优化
 ```lua
--- 变量名验证
-local valid, error = utils.validate_variable_name("user_name")  -- true
-local valid, error = utils.validate_variable_name("123invalid") -- false
+-- 避免在循环中创建新实例
+local engine = New 'Strp' ()  -- 复用实例
 
--- 模板大小限制
--- 超过1MB的模板会被拒绝
-
--- 输出大小限制
--- 超过10MB的输出会被截断
+-- 批量处理
+local templates = {
+    "Player: ${name}",
+    "Level: ${level}",
+    "Score: ${score}"
+}
+engine:warm_cache(templates)  -- 预热缓存
 ```
 
-## 📚 API参考
+## 📚 API 参考
 
-### 主要方法
-
-#### strp.render(template, env, options)
-渲染模板（无缓存）
-
-**参数：**
-- `template` (string): 模板字符串
-- `env` (table): 环境变量
-- `options` (table, 可选): 渲染选项
-
-**返回：**
-- `string`: 渲染结果
-
-#### strp.render_cached(template, env, options)
-渲染模板（带缓存，推荐）
-
-**参数：**
-- `template` (string): 模板字符串
-- `env` (table): 环境变量
-- `options` (table, 可选): 渲染选项
-
-**返回：**
-- `string`: 渲染结果
-
-#### strp.compile(template, options)
-编译模板为函数
-
-**参数：**
-- `template` (string): 模板字符串
-- `options` (table, 可选): 编译选项
-
-**返回：**
-- `function`: 编译后的模板函数
-- `string`: 错误信息（如果有）
+### 核心方法
+- `engine:render(template, env, options)` - 渲染模板
+- `engine:render_by_name(name, env, options)` - 按名称渲染
+- `engine:register_template(name, template)` - 注册模板
+- `engine:clear_cache()` - 清理缓存
+- `engine:get_cache_stats()` - 获取统计信息
 
 ### 工具方法
+- `engine:warm_cache(templates, options)` - 预热缓存
+- `engine:health_check()` - 健康检查
+- `engine:get_version()` - 获取版本
+- `engine:list_templates()` - 列出注册的模板
 
-#### strp.clear_cache()
-清空所有缓存
+## 🏷️ 版本信息
 
-#### strp.get_cache_stats()
-获取缓存统计信息
-
-**返回：**
-- `table`: 包含缓存统计的表
-
-#### strp.get_version()
-获取版本信息
-
-**返回：**
-- `string`: 版本号
-
-#### strp.health_check()
-系统健康检查
-
-**返回：**
-- `table`: 健康状态信息
-
-### 配置选项
-
-```lua
-local options = {
-    -- 基本选项
-    cache = true,              -- 启用缓存
-    debug = false,             -- 调试模式
-    strict = false,            -- 严格模式
-    autoescape = true,         -- 自动转义HTML
-    
-    -- 错误处理
-    error_handling = "strict", -- "strict" | "ignore" | "replace"
-    undefined_behavior = "error", -- "error" | "empty" | "keep"
-    
-    -- 格式化
-    encoding = "utf-8",        -- 字符编码
-    output_format = "string",  -- "string" | "table"
-    preserve_whitespace = false, -- 保留空白字符
-}
-```
-
-## 🏗️ 架构设计
-
-### 模块结构
-
-```
-┌─────────────────┐
-│   strp.lua      │  主API接口，缓存管理
-├─────────────────┤
-│ constants.lua   │  配置常量，性能参数
-│   utils.lua     │  工具函数，安全操作
-│  parser.lua     │  语法解析，变量处理
-│   handlers.lua  │  控制结构，宏系统
-│   filters.lua   │  过滤器库
-└─────────────────┘
-```
-
-### 处理流程
-
-```
-输入模板 → 语法解析 → 变量替换 → 过滤器处理 → 输出结果
-    ↓         ↓         ↓           ↓           ↓
-  验证检查   块结构     嵌套展开    链式调用    安全转义
-```
-
-### 缓存架构
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ 模板缓存    │    │ 解析缓存    │    │ 过滤器缓存  │
-│ Template    │    │ Parser      │    │ Filter      │
-│ Cache       │    │ Cache       │    │ Cache       │
-└─────────────┘    └─────────────┘    └─────────────┘
-       │                   │                   │
-       └─────────┬─────────┴─────────┬─────────┘
-                 │                   │
-           ┌─────────────┐    ┌─────────────┐
-           │ LRU淘汰算法  │    │ 统计监控    │
-           │ LRU Eviction│    │ Statistics  │
-           └─────────────┘    └─────────────┘
-```
-
-## 💡 最佳实践
-
-### 性能优化建议
-
-1. **使用缓存版本**
-   ```lua
-   -- 推荐：使用缓存版本
-   local result = strp.render_cached(template, data)
-   
-   -- 避免：频繁使用无缓存版本
-   local result = strp.render(template, data)
-   ```
-
-2. **预编译模板**
-   ```lua
-   -- 预编译常用模板
-   local compiled = strp.compile(template)
-   
-   -- 重复使用编译后的模板
-   local result1 = compiled(data1)
-   local result2 = compiled(data2)
-   ```
-
-3. **批量处理**
-   ```lua
-   -- 预热缓存
-   strp.warm_cache(common_templates)
-   
-   -- 批量渲染
-   local results = {}
-   for i, item in ipairs(items) do
-       results[i] = strp.render_cached(template, item)
-   end
-   ```
-
-### 安全最佳实践
-
-1. **输入验证**
-   ```lua
-   -- 验证用户输入
-   local function safe_render(template, user_data)
-       -- 清理用户数据
-       local clean_data = sanitize_user_input(user_data)
-       return strp.render_cached(template, clean_data, {
-           autoescape = true,
-           error_handling = "replace"
-       })
-   end
-   ```
-
-2. **权限控制**
-   ```lua
-   -- 限制可访问的数据
-   local safe_env = {
-       user = {name = user.name, id = user.id},
-       -- 不暴露敏感信息
-   }
-   ```
-
-### 调试技巧
-
-1. **启用调试模式**
-   ```lua
-   local result = strp.render(template, data, {
-       debug = true,
-       error_handling = "replace"
-   })
-   ```
-
-2. **健康监控**
-   ```lua
-   -- 定期检查系统状态
-   local health = strp.health_check()
-   if health.memory_warning then
-       -- 清理缓存或扩容
-   end
-   ```
-
-3. **缓存分析**
-   ```lua
-   local stats = strp.get_cache_stats()
-   if stats.template_cache.hit_rate < 0.8 then
-       -- 优化模板设计或缓存策略
-   end
-   ```
-
-## 🔄 版本升级指南
-
-### 从v2.0升级到v2.1
-
-#### 新增功能
-- ✨ 嵌套模板语法支持
-- 🚀 改进的缓存系统
-- 🔒 增强的安全机制
-- 📊 详细的性能监控
-
-#### 兼容性
-- ✅ 完全向后兼容
-- ✅ 现有API无变化
-- ✅ 配置选项保持一致
-
-#### 推荐升级步骤
-1. 更新模块文件
-2. 测试现有功能
-3. 逐步使用新特性
-4. 优化性能配置
-
-## 🤝 贡献指南
-
-我们欢迎社区贡献！请遵循以下步骤：
-
-1. Fork 项目
-2. 创建特性分支
-3. 编写测试用例
-4. 提交Pull Request
-
-### 开发环境设置
-
-```bash
-# 克隆项目
-git clone https://github.com/your-repo/strp.git
-
-# 运行测试
-lua test_all.lua
-
-# 性能测试
-lua benchmark.lua
-```
+- **当前版本**: 2.1.0
+- **兼容性**: Lua 5.1+, Y3 编辑器
+- **依赖**: Y3 Class 系统, UTF-8 扩展库
 
 ## 📄 许可证
 
-MIT License - 详见 LICENSE 文件
-
-## 🙏 致谢
-
-感谢所有贡献者和社区成员的支持！
+本项目遵循 MIT 许可证开源协议。
 
 ---
 
-**STRP v2.1** - 让模板渲染更简单、更安全、更高效！
-
-如有问题或建议，请提交 Issue 或联系维护者。
+**STRP 模板引擎** - 让动态内容生成变得简单而强大！ 🚀

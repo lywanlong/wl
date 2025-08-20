@@ -1,5 +1,7 @@
 require "y3"
 
+
+
 -- 万龙全局方法类
 ---@class Wl
 wl = {}
@@ -16,7 +18,7 @@ Vector2 = require 'wl.type.Vector2'.create
 ----------------------------------------------
 --- 工具
 ----------------------------------------------
-
-wl.strp = require 'wl.tools.strp'
+require 'wl.tools.strp'
 
 wl.uif = require 'wl.tools.uif'.new
+wl.strp = New 'Strp' ()
