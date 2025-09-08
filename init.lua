@@ -22,3 +22,13 @@ require 'wl.tools.strp'
 
 wl.uif = require 'wl.tools.uif'.new
 wl.strp = New 'Strp' ()
+
+--- 创建生命周期节点
+---@param onDel fun()
+---@return GCNode
+function wl.new_gc(onDel)
+    return New 'GCNode' (onDel)
+end
+
+
+
