@@ -236,6 +236,11 @@ function M:refresh_prefab(prefab_token, count, on_create, on_refresh)
     if not self._main then
         error('还未初始化完成，请放到 `on_init` 事件中执行！')
     end
+    if not self._player then
+        if prefab_token._player then
+        self._player = prefab_token._player
+        end
+    end
     for _, info in ipairs(self._prefab_infos) do
         if info.prefab_token ~= prefab_token then
             goto continue
