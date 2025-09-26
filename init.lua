@@ -29,6 +29,3 @@ wl.strp = New 'Strp' ()
 function wl.new_gc(onDel)
     return New 'GCNode' (onDel)
 end
-
-
-
